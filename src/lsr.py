@@ -6,9 +6,88 @@ neighbor selection in embedding-based retrieval systems.
 """
 
 import numpy as np
-from sklearn.decomposition import PCA
 from typing import Tuple, List, Dict, Optional
 import warnings
+
+
+def power_iteration(X_centered: np.ndarray, n_iterations: int = 10) -> Tuple[np.ndarray, float]:
+    """
+    Compute the top eigenvector and eigenvalue of X^T X / n via power iteration
+    on the data matrix directly, without forming the d x d covariance matrix.
+
+    Cost: O(T * N * d) where T is n_iterations.
+    This is critical for high-dimensional embeddings (d=1536, 3072) where
+    forming the covariance matrix costs O(N * d^2) and eigendecomposition O(d^3).
+
+    Args:
+        X_centered: Centered data matrix (n, d)
+        n_iterations: Number of power iteration steps (default: 10)
+
+    Returns:
+        v: Top eigenvector (d,)
+        eigenvalue: Corresponding eigenvalue (variance along v)
+    """
+    n, d = X_centered.shape
+    rng = np.random.RandomState(0)
+    v = rng.randn(d)
+    v /= np.linalg.norm(v)
+
+    for _ in range(n_iterations):
+        # Multiply by covariance without forming it: (X^T X) v = X^T (X v)
+        Xv = X_centered @ v          # (n,)  — O(nd)
+        XtXv = X_centered.T @ Xv     # (d,)  — O(nd)
+        norm = np.linalg.norm(XtXv)
+        if norm < 1e-12:
+            break
+        v = XtXv / norm
+
+    # Eigenvalue = v^T (X^T X / n) v = ||Xv||^2 / n
+    Xv = X_centered @ v
+    eigenvalue = float(np.dot(Xv, Xv) / n)
+    return v, eigenvalue
+
+
+def l1_principal_component(X_centered: np.ndarray, max_iter: int = 50, tol: float = 1e-6) -> np.ndarray:
+    """
+    Compute the first principal component using L1-norm maximization.
+
+    Finds v = argmax_{||v||=1} sum_i |v^T x_i| using the bit-flipping
+    algorithm of Markopoulos et al. (2017). More robust to outliers than
+    standard (L2) PCA.
+
+    Args:
+        X_centered: Centered data matrix (n, d)
+        max_iter: Maximum iterations for optimization
+        tol: Convergence tolerance
+
+    Returns:
+        v: Unit vector maximizing sum of absolute projections (d,)
+    """
+    n = X_centered.shape[0]
+
+    # Initialize with L2 direction via power iteration (not eigendecomposition)
+    v, _ = power_iteration(X_centered, n_iterations=10)
+
+    for _ in range(max_iter):
+        # Compute projections and their signs
+        projections = X_centered @ v
+        signs = np.sign(projections)
+        signs[signs == 0] = 1.0
+
+        # Weighted sum: v_new = sum_i sign(v^T x_i) * x_i
+        v_new = X_centered.T @ signs
+        v_new_norm = np.linalg.norm(v_new)
+        if v_new_norm < 1e-12:
+            break
+        v_new = v_new / v_new_norm
+
+        # Check convergence
+        if np.abs(np.abs(v_new @ v) - 1.0) < tol:
+            v = v_new
+            break
+        v = v_new
+
+    return v
 
 
 class LocalSpectralRetrieval:
@@ -17,7 +96,8 @@ class LocalSpectralRetrieval:
     by incorporating the local geometric structure of threshold-defined neighborhoods.
     """
 
-    def __init__(self, n_components: int = 1, sampling_method: str = "quantile"):
+    def __init__(self, n_components: int = 1, sampling_method: str = "quantile",
+                 pca_norm: str = "l2"):
         """
         Initialize LSR.
 
@@ -25,12 +105,14 @@ class LocalSpectralRetrieval:
             n_components: Number of principal components to use (default: 1)
             sampling_method: Method for sampling along principal direction
                            ('quantile' or 'deterministic')
+            pca_norm: Norm for PCA direction finding ('l2' or 'l1').
+                     L2 (default) maximizes variance; fast via eigendecomposition.
+                     L1 maximizes sum of absolute projections; robust to outliers.
         """
         self.n_components = n_components
         self.sampling_method = sampling_method
-        self.pca = None
+        self.pca_norm = pca_norm
         self.neighborhood_mean = None
-        self.neighborhood_cov = None
         self.eigenvalues = None
         self.eigenvectors = None
 
@@ -69,7 +151,11 @@ class LocalSpectralRetrieval:
 
     def fit_local_pca(self, neighborhood: np.ndarray) -> Dict:
         """
-        Compute local PCA on the neighborhood.
+        Compute local PCA on the neighborhood using power iteration.
+
+        Cost: O(T * N * d) where T ~ 10 iterations.
+        Does NOT form the d x d covariance matrix, making it efficient
+        for high-dimensional embeddings (d = 1536, 3072).
 
         Args:
             neighborhood: Neighborhood embeddings (n, d)
@@ -84,27 +170,24 @@ class LocalSpectralRetrieval:
         self.neighborhood_mean = neighborhood.mean(axis=0)
         centered = neighborhood - self.neighborhood_mean
 
-        # Compute covariance
-        self.neighborhood_cov = (centered.T @ centered) / len(neighborhood)
+        if self.pca_norm == "l1":
+            v1 = l1_principal_component(centered)
+            eigenvalue = float(np.sum((centered @ v1) ** 2) / len(neighborhood))
+        else:
+            v1, eigenvalue = power_iteration(centered, n_iterations=10)
 
-        # Compute eigendecomposition
-        eigenvalues, eigenvectors = np.linalg.eigh(self.neighborhood_cov)
+        # Compute total variance without forming covariance: trace(C) = sum of squared norms / n
+        total_variance = float(np.sum(centered ** 2) / len(neighborhood))
+        r1 = eigenvalue / total_variance if total_variance > 1e-12 else 0.0
 
-        # Sort by eigenvalues in descending order
-        idx = np.argsort(-eigenvalues)
-        self.eigenvalues = eigenvalues[idx]
-        self.eigenvectors = eigenvectors[:, idx]
-
-        # Use sklearn PCA for consistency
-        n_comps = min(self.n_components, neighborhood.shape[1], len(neighborhood))
-        self.pca = PCA(n_components=n_comps)
-        self.pca.fit(centered)
+        self.eigenvalues = np.array([eigenvalue])
+        self.eigenvectors = v1.reshape(-1, 1)  # Store as column
 
         return {
             'eigenvalues': self.eigenvalues,
-            'eigenvectors': self.eigenvectors,
-            'explained_variance_ratio': self.pca.explained_variance_ratio_,
-            'mean': self.neighborhood_mean
+            'explained_variance_ratio': np.array([r1]),
+            'mean': self.neighborhood_mean,
+            'pca_norm': self.pca_norm
         }
 
     def project_onto_principal_direction(
@@ -123,7 +206,7 @@ class LocalSpectralRetrieval:
             Projections onto principal direction (n,)
         """
         centered = neighborhood - self.neighborhood_mean
-        principal_vector = self.eigenvectors[:, component]
+        principal_vector = self.eigenvectors[:, component] if self.eigenvectors.ndim == 2 else self.eigenvectors
         projections = centered @ principal_vector
         return projections
 
@@ -259,11 +342,13 @@ class AdaptiveLSR:
         moderate_threshold: float = 0.50,
         lambda_param: float = 0.5,
         sampling_method: str = "quantile",
+        pca_norm: str = "l2",
     ):
         self.strong_threshold = strong_threshold
         self.moderate_threshold = moderate_threshold
         self.lambda_param = lambda_param
         self.sampling_method = sampling_method
+        self.pca_norm = pca_norm
         self._last_info = None
 
     @property
@@ -310,18 +395,30 @@ class AdaptiveLSR:
 
         neighborhood = corpus_embeddings[candidate_indices]
 
-        # Step 2: local PCA
-        pca = PCA(n_components=min(3, len(neighborhood), neighborhood.shape[1]))
-        pca.fit(neighborhood)
-        r1 = float(pca.explained_variance_ratio_[0])
+        # Step 2: local PCA via power iteration — O(T*N*d), no d x d covariance
+        centered = neighborhood - neighborhood.mean(axis=0)
+
+        if self.pca_norm == "l1":
+            v1 = l1_principal_component(centered)
+            eig1 = float(np.sum((centered @ v1) ** 2) / len(neighborhood))
+        else:
+            v1, eig1 = power_iteration(centered, n_iterations=10)
+
+        total_var = float(np.sum(centered ** 2) / len(neighborhood))
+        r1 = eig1 / total_var if total_var > 1e-12 else 0.0
+        projections_pc1 = centered @ v1
 
         # Step 3: route based on variance ratio
         if r1 >= self.strong_threshold:
             mode = "lsr"
-            selected = self._lsr_select(neighborhood, pca, k, n_components=1)
+            selected = self._lsr_select_fast(projections_pc1, k)
         elif r1 >= self.moderate_threshold:
             mode = "lsr_2pc"
-            selected = self._lsr_select(neighborhood, pca, k, n_components=2)
+            # For 2-component, compute second eigenvector via deflation + power iteration
+            deflated = centered - np.outer(projections_pc1, v1)
+            v2, _ = power_iteration(deflated, n_iterations=10)
+            projections_pc2 = centered @ v2
+            selected = self._lsr_select_2pc(projections_pc1, projections_pc2, k)
         else:
             mode = "mmr"
             selected = self._mmr_select(
@@ -332,40 +429,37 @@ class AdaptiveLSR:
             "mode": mode,
             "pc1_variance": r1,
             "n_candidates": len(candidate_indices),
-            "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+            "explained_variance_ratio": [r1],
+            "pca_norm": self.pca_norm if mode != "mmr" else "n/a",
         }
 
         selected_embeddings = neighborhood[selected]
         selected_corpus_indices = candidate_indices[selected]
         return selected_embeddings, selected_corpus_indices
 
-    def _lsr_select(
-        self, neighborhood: np.ndarray, pca: PCA, k: int, n_components: int = 1
-    ) -> np.ndarray:
-        """Select k points by quantile sampling along principal component(s)."""
-        projections = pca.transform(neighborhood)[:, 0]
+    def _lsr_select_fast(self, projections: np.ndarray, k: int) -> np.ndarray:
+        """Select k points by quantile sampling along pre-computed PC1 projections."""
         sorted_indices = np.argsort(projections)
         n = len(sorted_indices)
+        return np.array([sorted_indices[int(i * n / k)] for i in range(k)])
 
-        if n_components == 1 or pca.n_components_ < 2:
-            return np.array(
-                [sorted_indices[int(i * n / k)] for i in range(k)]
-            )
-
-        # 2-component grid sampling
-        proj2d = pca.transform(neighborhood)[:, :2]
+    def _lsr_select_2pc(
+        self, proj_pc1: np.ndarray, proj_pc2: np.ndarray, k: int
+    ) -> np.ndarray:
+        """Select k points by 2D grid sampling along PC1 and PC2."""
+        n = len(proj_pc1)
         grid_k = max(2, int(np.sqrt(k)))
         q1 = np.linspace(0, 1, grid_k + 1)
         selected = []
         for i in range(grid_k):
             for j in range(grid_k):
-                lo1 = np.quantile(proj2d[:, 0], q1[i])
-                hi1 = np.quantile(proj2d[:, 0], q1[i + 1])
-                lo2 = np.quantile(proj2d[:, 1], q1[j])
-                hi2 = np.quantile(proj2d[:, 1], q1[j + 1])
+                lo1 = np.quantile(proj_pc1, q1[i])
+                hi1 = np.quantile(proj_pc1, q1[i + 1])
+                lo2 = np.quantile(proj_pc2, q1[j])
+                hi2 = np.quantile(proj_pc2, q1[j + 1])
                 cell_mask = (
-                    (proj2d[:, 0] >= lo1) & (proj2d[:, 0] <= hi1)
-                    & (proj2d[:, 1] >= lo2) & (proj2d[:, 1] <= hi2)
+                    (proj_pc1 >= lo1) & (proj_pc1 <= hi1)
+                    & (proj_pc2 >= lo2) & (proj_pc2 <= hi2)
                 )
                 cell_indices = np.where(cell_mask)[0]
                 if len(cell_indices) > 0:
@@ -377,8 +471,9 @@ class AdaptiveLSR:
 
         # Fill remaining slots with PC1 quantile sampling if needed
         if len(selected) < k:
+            sorted_indices = np.argsort(proj_pc1)
             remaining = set(range(n)) - set(selected)
-            remaining_by_pc1 = sorted(remaining, key=lambda i: projections[i])
+            remaining_by_pc1 = sorted(remaining, key=lambda i: proj_pc1[i])
             step = max(1, len(remaining_by_pc1) // (k - len(selected)))
             for idx in remaining_by_pc1[::step]:
                 selected.append(idx)

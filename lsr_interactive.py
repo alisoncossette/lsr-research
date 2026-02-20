@@ -197,8 +197,11 @@ def _(PCA, np, seed_input, settings):
 
         # Spread along principal axis vs all other axes
         spread_along = 0.3
-        # Perpendicular noise — shrinks with collapse (across ALL 256 dims)
-        noise_scale = 0.08 * (1 - collapse_factor * 0.9)
+        # Perpendicular noise — must account for dimensionality!
+        # We want: signal_var / (signal_var + d * noise_var) ≈ collapse_factor
+        # So: noise_scale = sqrt(signal_var * (1 - collapse_factor) / (collapse_factor * d))
+        signal_var = (spread_along / n_clusters) ** 2  # approx variance along PC1
+        noise_scale = np.sqrt(signal_var * (1 - collapse_factor) / (max(collapse_factor, 0.01) * _EMBED_DIM))
 
         for i in range(n_docs):
             if i < n_relevant:

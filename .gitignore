@@ -39,3 +39,31 @@ docs/*.synctex.gz
 data/*.bin
 data/*.npy
 data/*.pkl
+data/*.csv
+data/*.html
+data/*.png
+
+# Large model/data files
+experiments/models/
+experiments/data/
+
+# Generated HTML visualizations
+*.html
+
+# Compiled PDF (rebuild from .tex)
+docs/*.pdf
+
+# Generated status/summary files
+COMPLETION_STATUS.txt
+DEMO_COMPLETE.md
+IMPROVED_DEMO_RESULTS.md
+PROJECT_INFO.md
+REPOSITORY_SUMMARY.md
+START_HERE.md
+TSNE_VISUALIZATION_COMPLETE.md
+VISUALIZATION_ANALYSIS.md
+docs/EXPERIMENTS.md
+docs/METHOD.md
+
+# Result images (regenerate from scripts)
+results/visualizations/

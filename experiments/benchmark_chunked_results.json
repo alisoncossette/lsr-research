@@ -1,0 +1,51 @@
+{
+  "config": {
+    "dataset": "NFCorpus (chunked)",
+    "chunk_size": 3,
+    "overlap": 2,
+    "k": 10,
+    "n_candidates": 50,
+    "mmr_lambda": 0.5,
+    "model": "all-MiniLM-L6-v2",
+    "n_queries": 323,
+    "n_chunks": 32925,
+    "n_original_docs": 3633
+  },
+  "intra_doc_similarity": {
+    "mean": 0.732808213930578,
+    "median": 0.737468421459198,
+    "p90": 0.8532325267791748
+  },
+  "candidate_pool_pc1": {
+    "mean": 0.17001158328894123,
+    "median": 0.16387656331062317,
+    "pct_above_50": 0.0,
+    "pct_above_70": 0.0
+  },
+  "summary": {
+    "Top-K": {
+      "redundancy": 0.5749644043829419,
+      "unique_docs": 5.08359133126935,
+      "recall": 0.12323573294556468,
+      "result_pc1": 0.34542973676333116
+    },
+    "MMR": {
+      "redundancy": 0.3689574121091019,
+      "unique_docs": 9.520123839009289,
+      "recall": 0.12796585687849593,
+      "result_pc1": 0.18744335865642264
+    },
+    "LSR": {
+      "redundancy": 0.4366980804240002,
+      "unique_docs": 8.253869969040247,
+      "recall": 0.11893989761041178,
+      "result_pc1": 0.2502637917043255
+    },
+    "Adaptive": {
+      "redundancy": 0.3689574121091019,
+      "unique_docs": 9.520123839009289,
+      "recall": 0.12796585687849593,
+      "result_pc1": 0.18744335865642264
+    }
+  }
+}

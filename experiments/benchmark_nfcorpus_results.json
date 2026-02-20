@@ -1,0 +1,286 @@
+{
+  "config": {
+    "dataset": "NFCorpus",
+    "k": 10,
+    "thresholds": [
+      0.3,
+      0.4,
+      0.5,
+      0.55,
+      0.6,
+      0.65,
+      0.7
+    ],
+    "mmr_lambda": 0.5,
+    "model": "all-MiniLM-L6-v2",
+    "n_queries": 323,
+    "n_corpus": 3633
+  },
+  "results_by_threshold": {
+    "0.3": {
+      "pc1_mean": 0.12570173294505468,
+      "pc1_median": 0.09762018173933029,
+      "pct_above_50": 0.030959752321981424,
+      "pct_above_70": 0.009287925696594427,
+      "neighborhood_size_mean": 158.9752321981424,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.802464574852226,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.30598014171890153,
+          "recall_mean": 0.08875149729942801,
+          "variance_coverage_mean": 0.7657496067392567,
+          "avg_selected": 7.594427244582043
+        },
+        "LSR": {
+          "redundancy_mean": 0.3634987666729061,
+          "recall_mean": 0.054629005893030706,
+          "variance_coverage_mean": 0.7451735972989085,
+          "avg_selected": 7.594427244582043
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.30598014171890153,
+          "recall_mean": 0.08875149729942801,
+          "variance_coverage_mean": 0.7657496067392567,
+          "avg_selected": 7.594427244582043
+        }
+      },
+      "adaptive_routing": {
+        "mmr": 224,
+        "all": 59,
+        "empty": 40
+      }
+    },
+    "0.4": {
+      "pc1_mean": 0.14275933755994213,
+      "pc1_median": 0.10752605646848679,
+      "pct_above_50": 0.05263157894736842,
+      "pct_above_70": 0.0,
+      "neighborhood_size_mean": 33.1671826625387,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.8575584619037876,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.4176693511569602,
+          "recall_mean": 0.08544940639959088,
+          "variance_coverage_mean": 0.6287556995548331,
+          "avg_selected": 5.513931888544891
+        },
+        "LSR": {
+          "redundancy_mean": 0.44773327361824167,
+          "recall_mean": 0.07725789580422025,
+          "variance_coverage_mean": 0.6175875632386458,
+          "avg_selected": 5.513931888544891
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.4176693511569602,
+          "recall_mean": 0.08544940639959088,
+          "variance_coverage_mean": 0.6287556995548331,
+          "avg_selected": 5.513931888544891
+        }
+      },
+      "adaptive_routing": {
+        "mmr": 138,
+        "all": 96,
+        "empty": 89
+      }
+    },
+    "0.5": {
+      "pc1_mean": 0.11921904069997209,
+      "pc1_median": 0.0,
+      "pct_above_50": 0.06501547987616099,
+      "pct_above_70": 0.015479876160990712,
+      "neighborhood_size_mean": 5.767801857585139,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.8560490312960126,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.44877454936504363,
+          "recall_mean": 0.06284299597323327,
+          "variance_coverage_mean": 0.4026940426221204,
+          "avg_selected": 2.8823529411764706
+        },
+        "LSR": {
+          "redundancy_mean": 0.45910486491287456,
+          "recall_mean": 0.05355677382991216,
+          "variance_coverage_mean": 0.39890123742283684,
+          "avg_selected": 2.8823529411764706
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.44877454936504363,
+          "recall_mean": 0.06284299597323327,
+          "variance_coverage_mean": 0.4026940426221204,
+          "avg_selected": 2.8823529411764706
+        }
+      },
+      "adaptive_routing": {
+        "mmr": 48,
+        "empty": 153,
+        "all": 122
+      }
+    },
+    "0.55": {
+      "pc1_mean": 0.08254954664053932,
+      "pc1_median": 0.0,
+      "pct_above_50": 0.043343653250773995,
+      "pct_above_70": 0.006191950464396285,
+      "neighborhood_size_mean": 2.498452012383901,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.8747672438621521,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.4638382735160681,
+          "recall_mean": 0.0443996213065373,
+          "variance_coverage_mean": 0.28739820508395925,
+          "avg_selected": 1.7275541795665634
+        },
+        "LSR": {
+          "redundancy_mean": 0.46767667875840113,
+          "recall_mean": 0.0412027183785634,
+          "variance_coverage_mean": 0.28595171015329035,
+          "avg_selected": 1.7275541795665634
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.4638382735160681,
+          "recall_mean": 0.0443996213065373,
+          "variance_coverage_mean": 0.28739820508395925,
+          "avg_selected": 1.7275541795665634
+        }
+      },
+      "adaptive_routing": {
+        "all": 110,
+        "empty": 193,
+        "mmr": 20
+      }
+    },
+    "0.6": {
+      "pc1_mean": 0.03675531485224656,
+      "pc1_median": 0.0,
+      "pct_above_50": 0.018575851393188854,
+      "pct_above_70": 0.006191950464396285,
+      "neighborhood_size_mean": 1.1238390092879258,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.8768890710437999,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.3898677763550781,
+          "recall_mean": 0.029762526178644954,
+          "variance_coverage_mean": 0.14756158649367815,
+          "avg_selected": 0.9071207430340558
+        },
+        "LSR": {
+          "redundancy_mean": 0.39227283347484676,
+          "recall_mean": 0.02970803812372987,
+          "variance_coverage_mean": 0.14691436807437577,
+          "avg_selected": 0.9071207430340558
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.3898677763550781,
+          "recall_mean": 0.029762526178644954,
+          "variance_coverage_mean": 0.14756158649367815,
+          "avg_selected": 0.9071207430340558
+        }
+      },
+      "adaptive_routing": {
+        "all": 78,
+        "empty": 237,
+        "mmr": 8
+      }
+    },
+    "0.65": {
+      "pc1_mean": 0.032944062269139957,
+      "pc1_median": 0.0,
+      "pct_above_50": 0.03715170278637771,
+      "pct_above_70": 0.0,
+      "neighborhood_size_mean": 0.5201238390092879,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.9108479713138781,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.37742804929062174,
+          "recall_mean": 0.016520043259630666,
+          "variance_coverage_mean": 0.08025892378745064,
+          "avg_selected": 0.48606811145510836
+        },
+        "LSR": {
+          "redundancy_mean": 0.37825602182635554,
+          "recall_mean": 0.016520043259630666,
+          "variance_coverage_mean": 0.08013482839330431,
+          "avg_selected": 0.48606811145510836
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.37742804929062174,
+          "recall_mean": 0.016520043259630666,
+          "variance_coverage_mean": 0.08025892378745064,
+          "avg_selected": 0.48606811145510836
+        }
+      },
+      "adaptive_routing": {
+        "empty": 269,
+        "all": 53,
+        "mmr": 1
+      }
+    },
+    "0.7": {
+      "pc1_mean": 0.011453566905514743,
+      "pc1_median": 0.0,
+      "pct_above_50": 0.009287925696594427,
+      "pct_above_70": 0.0030959752321981426,
+      "neighborhood_size_mean": 0.20123839009287925,
+      "methods": {
+        "Top-K": {
+          "redundancy_mean": 0.4557524756196852,
+          "recall_mean": 0.15892031320875974,
+          "variance_coverage_mean": 0.9375348223990331,
+          "avg_selected": 10.0
+        },
+        "MMR": {
+          "redundancy_mean": 0.306412510573864,
+          "recall_mean": 0.006545059253089151,
+          "variance_coverage_mean": 0.03715170278637771,
+          "avg_selected": 0.20123839009287925
+        },
+        "LSR": {
+          "redundancy_mean": 0.306412510573864,
+          "recall_mean": 0.006545059253089151,
+          "variance_coverage_mean": 0.03715170278637771,
+          "avg_selected": 0.20123839009287925
+        },
+        "Adaptive": {
+          "redundancy_mean": 0.306412510573864,
+          "recall_mean": 0.006545059253089151,
+          "variance_coverage_mean": 0.03715170278637771,
+          "avg_selected": 0.20123839009287925
+        }
+      },
+      "adaptive_routing": {
+        "empty": 291,
+        "all": 32
+      }
+    }
+  }
+}
