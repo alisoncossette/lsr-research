@@ -1,0 +1,484 @@
+\documentclass{article}
+\usepackage{times}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\title{Local Spectral Retrieval: Variance-Aware Neighbor Selection via PCA in Thresholded Embedding Neighborhoods}
+
+\author{
+  Alison Cossette \\
+  \texttt{alison@claritrace.com}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This paper introduces \textbf{Local Spectral Retrieval (LSR)}, a retrieval method that improves embedding-based search by incorporating the local geometric structure of threshold-defined neighborhoods. Traditional cosine-based retrieval treats each neighbor independently and is insensitive to redundancy caused by density collapse. LSR first performs radius-based retrieval using a minimum cosine similarity threshold, then applies Principal Component Analysis to the resulting neighborhood. It then samples $k$ neighbors that maximize variance along the dominant principal direction, producing a diverse, non-redundant set of documents. Experiments on multiple QA benchmarks demonstrate that LSR improves multi-hop recall, reduces redundancy, and enhances RAG answer accuracy. 
+\end{abstract}
+
+
+\section{Introduction}
+
+Embedding-based retrieval sits at the core of modern information access systems, including vector databases, large language model (LLM) retrieval-augmented generation (RAG), and search pipelines built on dense neural representations. The dominant approach---ranking documents by cosine similarity and selecting the top-$k$---assumes that local neighborhoods in embedding space are well-behaved, smoothly distributed, and structurally informative. In practice, however, this assumption rarely holds. Real-world corpora contain paraphrase clusters, boilerplate text, templated content, and highly redundant segments, all of which can collapse into dense regions of embedding space. As a result, cosine similarity often retrieves many near-duplicate neighbors, hurting diversity, factual coverage, and downstream reasoning performance.
+\par
+Threshold-based retrieval methods, such as radius or similarity cutoff queries supported by vector databases, attempt to improve recall by returning all points above a minimum similarity level. While effective in theory, these methods amplify the redundancy problem: dense semantic regions may contain dozens or hundreds of highly similar vectors that all satisfy the threshold, overwhelming top-$k$ selection and producing context that is unnecessarily repetitive. This behavior is especially problematic in multi-hop or compositional question answering, where retrieving diverse pieces of evidence is more important than retrieving multiple versions of the same fact.
+\par
+Dense retrieval systems\cite{karpukhin2020dense} and modern vector databases such as FAISS\cite{johnson2019billion} form the backbone of RAG pipelines \cite{lewis2020rag}.
+\par
+A key limitation of cosine similarity---and of most existing retrieval strategies built on it---is that it is \emph{pointwise}. The similarity between a query and each candidate is evaluated independently, without regard for the geometric structure of the neighborhood itself. Important local properties such as variance, redundancy structure, and principal directions of semantic change are ignored. In dense regions, the local covariance is often dominated by one or two principal components, revealing that the neighborhood collapses along a low-dimensional manifold. Cosine similarity cannot detect this collapse, nor can it use spectral information to diversify selection.
+\par
+This paper introduces \textbf{Local Spectral Retrieval (LSR)}, a simple but effective method that incorporates local geometric structure into the retrieval process. LSR first performs threshold-based retrieval to form a high-recall semantic neighborhood, then applies Principal Component Analysis (PCA) to characterize the neighborhood's internal structure. Finally, LSR selects $k$ neighbors by sampling along the dominant principal direction, ensuring that the returned set spans the local variance instead of collapsing onto redundant points. This approach preserves the strengths of threshold-based retrieval while mitigating its tendency to surface repetitive or low-information neighbors.
+
+The contributions are threefold:
+\begin{enumerate}
+    \item Identification and formalization of the issue of \emph{density collapse} in high-dimensional embedding retrieval, showing how threshold-based methods exacerbate redundancy.
+    \item A retrieval framework, LSR, that leverages local PCA to select a variance-maximizing subset of neighbors from the threshold-defined region.
+    \item Empirical demonstration that LSR improves evidence diversity, multi-hop recall, and RAG answer quality across several QA benchmarks, while adding minimal computational overhead.
+\end{enumerate}
+
+LSR offers a practical, interpretable, and geometry-aware alternative to traditional top-$k$ and MMR-based retrieval, advancing toward retrieval methods that better reflect the manifold structure of modern embedding spaces.
+
+\section{Related Work}
+
+\subsection{Cosine Similarity and Top-$k$ Retrieval}
+Dense embedding retrieval systems typically rely on cosine similarity or dot-product scoring to identify relevant neighbors \cite{johnson2019billion, karpukhin2020dense}. The dominant paradigm selects the top-$k$ highest-scoring vectors for downstream use. While effective for identifying individually relevant items, top-$k$ retrieval is inherently pointwise: it evaluates each candidate independently with no awareness of the structure or redundancy within the retrieved set. This often results in multiple near-duplicate neighbors in dense regions of embedding space, reducing contextual diversity and limiting downstream reasoning performance.
+
+\subsection{Threshold and Radius-Based Retrieval}
+Modern vector databases such as FAISS\cite{johnson2019billion}, Milvus, and OpenSearch support similarity-threshold or radius queries, which return all points within a specified distance or similarity cutoff. Such methods improve recall and allow adaptive neighborhood sizes, but they also exacerbate redundancy when large clusters of nearly identical vectors satisfy the threshold. Prior work on high-dimensional search structures, including HNSW \cite{malkov2018efficient} and IVF-based quantization methods \cite{jegou2011product}, focuses primarily on approximate search efficiency rather than improving the semantic quality or diversity of retrieved neighbors. To our knowledge, no prior method systematically analyzes or mitigates density collapse within threshold-defined neighborhoods.
+Radius-based search is supported by modern ANN systems including FAISS \cite{johnson2019billion}, Milvus, and HNSW-based methods \cite{malkov2018efficient}.
+
+\subsection{Diversified Retrieval and Re-ranking}
+To counter redundancy in top-$k$ retrieval, several diversification techniques have been proposed. Maximal Marginal Relevance (MMR) \cite{carbonell1998mmr} and more recent neural variants \cite{ray2023learning} aim to balance relevance and novelty by penalizing similarity to previously selected items. Other approaches leverage submodular optimization \cite{lin2012learning}, clustering-based selection \cite{xia2022dense}, or coverage-based scoring to improve diversity. While effective, these methods operate on pairwise similarities among candidates and do not incorporate geometric information such as principal directions or eigenvalue structure. As a result, they remain less sensitive to low-dimensional collapse within high-density regions.
+
+\subsection{PCA and Spectral Methods in Retrieval}
+Principal Component Analysis and related spectral methods have been widely used for dimensionality reduction, clustering, and indexing. PCA-trees \cite{sproull1991pca} and spectral partitioning methods exploit principal directions to construct efficient search structures, but these techniques focus on global or recursive partitioning and do not use PCA to analyze local neighborhoods returned by similarity search. More recent work on dimensionality-reduced retrieval for RAG \cite{park2024pca} applies PCA to embeddings globally, typically for compression or efficiency, not for diversity-aware neighbor selection. In contrast, LSR performs \emph{local} PCA on the threshold-defined region, using spectral variance directly to guide neighbor selection.
+
+\subsection{Retrieval-Augmented Generation}
+RAG systems rely heavily on the quality and diversity of retrieved evidence \cite{lewis2020rag, izacard2021leveraging}. Prior studies show that redundancy in retrieved documents reduces faithfulness, increases hallucinations, and degrades multi-hop performance. Approaches to improve RAG often focus on re-ranking, query reformulation, or iterative retrieval \cite{khattab2021relevance, trivedi2022contextual}, but few works examine the geometric structure of embedding neighborhoods themselves. LSR complements these methods, providing a simple mechanism to produce more informative and diverse evidence sets before any re-ranking or generation stage.
+
+\subsection{Summary}
+Across top-$k$ retrieval, threshold search, diversification strategies, and spectral methods, prior work has not fully addressed the challenge of density collapse in local embedding neighborhoods. This work addresses this gap by introducing a geometry-aware retrieval strategy that leverages local PCA structure to guide variance-maximizing neighbor selection.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.75\linewidth]{figs/density_collapse.pdf}
+    \caption{
+        Example of density collapse in a threshold-defined neighborhood.
+        Although the neighborhood contains many points above the similarity threshold,
+        most lie along a low-dimensional manifold. Cosine similarity alone cannot detect
+        this redundancy, motivating the need for variance-aware selection.
+    }
+    \label{fig:density-collapse}
+\end{figure}
+
+\section{Problem Formulation}
+
+Let $\{x_i\}_{i=1}^N$ denote a corpus of embedding vectors in $\mathbb{R}^d$, and let $q \in \mathbb{R}^d$ be the query embedding. Retrieval systems typically identify relevant items by computing the cosine similarity
+\begin{equation}
+    s(q, x_i) = \frac{q^\top x_i}{\|q\|\|x_i\|},
+\end{equation}
+and selecting either the top-$k$ highest-scoring vectors or all vectors whose similarity exceeds a threshold $\tau$.
+
+\subsection{Threshold-Based Neighborhoods}
+In threshold retrieval, the system returns the set:
+\begin{equation}
+    \mathcal{N}(q, \tau) = \{ x_i : s(q, x_i) \ge \tau \}.
+\end{equation}
+This region forms a high-recall neighborhood around the query. However, when the embedding distribution contains dense clusters or low-variance manifolds, $\mathcal{N}$ may contain many redundancies. In practice, $|\mathcal{N}|$ can range from a handful of items to hundreds, depending on corpus density and the value of $\tau$.
+Modern vector search systems such as FAISS \cite{johnson2019billion} and HNSW-based engines \cite{malkov2018efficient} support radius and similarity-threshold queries.
+
+The goal is to select a subset $\mathcal{S} \subseteq \mathcal{N}$ of size $k$ that is both relevant and diverse. Formally, the objective is to preserve semantic compatibility with the query while maximizing coverage of the local geometric structure of $\mathcal{N}$.
+
+\subsection{Density Collapse in Embedding Space}
+Empirically, threshold neighborhoods often exhibit \emph{density collapse}: most of the variance is concentrated along one or two directions. Let $\mu$ denote the mean of $\mathcal{N}$ and let the centered matrix be
+\begin{equation}
+    Z = [x - \mu : x \in \mathcal{N}]^\top.
+\end{equation}
+
+The local covariance matrix is
+\begin{equation}
+    C = \frac{1}{|\mathcal{N}|} Z^\top Z.
+\end{equation}
+
+The eigenvalues $\lambda_1 \ge \lambda_2 \ge \cdots \ge \lambda_d$ characterize the variance distribution within the neighborhood. In dense regions, it is common to observe a strongly dominant first component,
+\begin{equation}
+    \lambda_1 \gg \lambda_2, \lambda_3, \ldots,
+\end{equation}
+indicating that most variation lies along a single direction. This collapse leads to redundancy: many points in $\mathcal{N}$ are near-duplicates or paraphrases, differing only slightly along the dominant axis. Cosine similarity alone cannot detect this structure, as it treats each point independently.
+
+\subsection{Objective: Variance-Aware Selection}
+Given a threshold-defined neighborhood $\mathcal{N}$ with covariance eigenstructure $(\lambda_j, v_j)$, this work defines a selection function
+\begin{equation}
+    \text{Select}_k : \mathcal{N} \rightarrow \mathcal{S} \subseteq \mathcal{N},
+\end{equation}
+such that:
+\begin{enumerate}
+    \item $\mathcal{S}$ contains $k$ items relevant to the query, and
+    \item $\mathcal{S}$ spans a maximal portion of the local variance of $\mathcal{N}$.
+\end{enumerate}
+
+For practical retrieval systems, the selection should satisfy additional constraints:
+\begin{itemize}
+    \item \textbf{Low additional cost:} The method must be lightweight compared to similarity search.
+    \item \textbf{Locality:} Computation depends only on $\mathcal{N}$, not on the global corpus.
+    \item \textbf{Interpretability:} The mechanism should provide insight into neighborhood structure.
+\end{itemize}
+
+\subsection{Local Spectral Retrieval}
+Local Spectral Retrieval (LSR) instantiates the selection problem by projecting all points in $\mathcal{N}$ onto the leading principal component $v_1$ and sampling points that best cover the induced one-dimensional structure. Operating on the spectral geometry of the neighborhood rather than pointwise similarities, LSR directly addresses the collapse phenomenon and promotes meaningful diversity in the retrieved set.
+
+\section{Local Spectral Retrieval (LSR)}
+
+\begin{algorithm}[h]
+\caption{Local Spectral Retrieval (LSR)}
+\begin{algorithmic}
+\STATE \textbf{Input:} query $q$, dataset $X$, threshold $\tau$, sample size $k$
+\STATE $\mathcal{N} \leftarrow \{ x \in X : \cos(q,x) \geq \tau \}$
+\IF{$|\mathcal{N}| \leq k$}
+  \RETURN $\mathcal{N}$
+\ENDIF
+\STATE compute $\mu$ and covariance $C$
+\STATE compute top eigenvector $v_1$ and eigenvalues $\lambda_1, \ldots, \lambda_d$
+\FOR{$x \in \mathcal{N}$}
+  \STATE $p(x) \leftarrow v_1^\top (x - \mu)$
+\ENDFOR
+\STATE sort $\mathcal{N}$ by $p(x)$
+\STATE select $k$ points by quantile sampling
+\RETURN selected $k$ points
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{Adaptive LSR}
+\begin{algorithmic}
+\STATE \textbf{Input:} query $q$, dataset $X$, threshold $\tau$, sample size $k$
+\STATE $\mathcal{N} \leftarrow \{ x \in X : \cos(q,x) \geq \tau \}$
+\IF{$|\mathcal{N}| \leq k$}
+  \RETURN $\mathcal{N}$
+\ENDIF
+\STATE compute PCA on $\mathcal{N}$; obtain $r_1 = \lambda_1 / \sum_j \lambda_j$
+\IF{$r_1 \geq 0.70$}
+  \STATE \textit{// Strong collapse: standard LSR}
+  \RETURN quantile sample along $v_1$
+\ELSIF{$r_1 \geq 0.50$}
+  \STATE \textit{// Moderate collapse: two-component LSR}
+  \RETURN grid sample along $v_1, v_2$
+\ELSE
+  \STATE \textit{// Weak collapse: fallback}
+  \RETURN MMR or top-$k$ selection
+\ENDIF
+\end{algorithmic}
+\end{algorithm}
+
+Local Spectral Retrieval (LSR) aims to improve the diversity and informativeness of retrieved neighbors by leveraging the spectral structure of threshold-defined embedding neighborhoods. Rather than selecting the top-$k$ points by cosine similarity or re-ranking candidates using pairwise penalties, LSR analyzes the local covariance geometry and selects documents that span the dominant directions of variance. This section details the method.
+
+\subsection{Step 1: Constructing the Threshold Neighborhood}
+
+Given a query embedding $q$, LSR begins by constructing the high-recall neighborhood
+\begin{equation}
+    \mathcal{N} = \{ x_i \in X : s(q, x_i) \geq \tau \},
+\end{equation}
+where $\tau$ is a similarity threshold. This operation is supported by most vector databases and efficiently executed using approximate nearest neighbor (ANN) indexes. Threshold retrieval typically yields a set whose size $|\mathcal{N}|$ varies with corpus density and query specificity.
+
+If $|\mathcal{N}| \le k$, LSR simply returns all retrieved items. Otherwise, the method proceeds to variance analysis.
+
+\subsection{Step 2: Local PCA on the Retrieved Neighborhood}
+PCA-based neighborhood analysis has long been used to characterize local manifold structure \cite{sproull1991pca}.
+To characterize the internal geometry of $\mathcal{N}$, LSR computes its mean
+\begin{equation}
+    \mu = \frac{1}{|\mathcal{N}|} \sum_{x \in \mathcal{N}} x
+\end{equation}
+and covariance
+\begin{equation}
+    C = \frac{1}{|\mathcal{N}|} \sum_{x \in \mathcal{N}} (x - \mu)(x - \mu)^\top.
+\end{equation}
+
+The leading eigenvector $v_1$ of $C$ is then computed, corresponding to the principal direction of maximum variance. In practice, computing only the top eigenpair is sufficient, and efficient power iteration makes this step inexpensive even for high-dimensional embeddings.
+
+A key observation is that density collapse manifests as a dominant $\lambda_1$; thus, selecting points that spread along $v_1$ captures the essential variability of the region.
+
+\subsection{Step 3: Projection onto the Dominant Direction}
+
+Each point $x \in \mathcal{N}$ is projected onto the principal direction $v_1$:
+\begin{equation}
+    p(x) = v_1^\top (x - \mu).
+\end{equation}
+
+This transforms the high-dimensional neighborhood into a one-dimensional coordinate system aligned with its maximal variance. The distribution of the projected values $\{p(x)\}$ reflects how points spread or cluster along this direction, revealing local redundancy patterns.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.75\linewidth]{figs/pc1_projection.pdf}
+    \caption{
+        Distribution of scalar projections onto the dominant principal component
+        for a typical threshold neighborhood. Clustering of values reveals redundancy
+        in evidence candidates, while spread along PC1 reflects semantic variation.
+    }
+    \label{fig:pc1-projection}
+\end{figure}
+
+\subsection{Step 4: Variance-Aware Sampling}
+
+To obtain $k$ diverse neighbors, LSR selects items according to their positions along the 1D projection. Several sampling strategies are possible, including:
+\begin{itemize}
+    \item \textbf{Quantile Sampling:} Partition the sorted projections into $k$ equal-sized bins and sample one representative per bin.
+    \item \textbf{Deterministic Spacing:} Select points at evenly spaced ranks along the sorted list.
+    \item \textbf{Multi-PC Extension (Optional):} Incorporate $v_2$ or additional principal directions for neighborhoods with more complex structure.
+\end{itemize}
+
+In this work, quantile sampling is used due to its robustness and interpretability. Formally, if the projections are sorted as $p_{(1)} \le \cdots \le p_{(|\mathcal{N}|)}$, LSR returns:
+\begin{equation}
+    \mathcal{S} = \{ x_{( \lfloor i \cdot |\mathcal{N}| / k \rfloor )} : i = 1, \ldots, k \}.
+\end{equation}
+
+This ensures that $\mathcal{S}$ spans the local principal axis, maximizing variance coverage and minimizing redundancy.
+
+\subsection{Computational Complexity}
+
+LSR incurs minimal overhead beyond threshold retrieval. Computing the mean and covariance of $\mathcal{N}$ takes $O(|\mathcal{N}| d)$ time. Extracting the top eigenvector via power iteration costs $O(T |\mathcal{N}| d)$, where $T$ is typically small (5--10 iterations). Projection and sampling require an additional $O(|\mathcal{N}|)$ operations.
+
+LSR offers competitive or superior computational efficiency compared to common diversification baselines. For a threshold neighborhood of size $n$ in embedding dimension $d$, computing the mean and covariance requires $O(nd)$ time, and extracting the top eigenvector with a small number of power-iteration steps adds another $O(ndT)$, where $T$ is typically between 5--10. In contrast, Maximal Marginal Relevance (MMR) requires evaluating similarities between each candidate and each of the $k$ selected items, yielding $O(nk)$ complexity---similar in scale when $k \ll d$, but lacking LSR's geometric signal. Clustering-based baselines such as local $k$-means incur substantially higher cost at $O(ndKI)$, where $K$ is the number of clusters and $I$ the number of iterations. Methods that rely on pairwise redundancy estimates ($O(n^2 d)$) are significantly more expensive. Thus, LSR achieves meaningful diversity improvements while maintaining low overhead suitable for production retrieval systems.
+
+Because $|\mathcal{N}|$ is usually modest (tens to hundreds of points), LSR is computationally lightweight and can be integrated seamlessly into retrieval pipelines.
+
+\subsection{Adaptive Mode Selection via Variance Coverage}
+\label{sec:adaptive}
+
+Not all threshold neighborhoods exhibit the density collapse that makes LSR effective. In practice, the degree of collapse varies significantly across queries: some neighborhoods are tightly collapsed along a single direction, while others exhibit a more isotropic or multimodal variance structure. Applying LSR uniformly regardless of neighborhood geometry can be suboptimal---in weakly collapsed neighborhoods, the principal component carries little meaningful signal, and variance-aware sampling may not outperform simpler baselines.
+
+To address this, we introduce \textbf{Adaptive LSR}, which uses the explained variance ratio of the first principal component as a diagnostic signal to select the appropriate retrieval strategy at query time. Specifically, after computing local PCA on $\mathcal{N}$, the system inspects:
+\begin{equation}
+    r_1 = \frac{\lambda_1}{\sum_{j=1}^{d} \lambda_j},
+\end{equation}
+the fraction of total variance explained by the first principal component.
+
+Adaptive LSR applies the following decision rules:
+\begin{itemize}
+    \item \textbf{Strong collapse} ($r_1 \geq 0.70$): The neighborhood is dominated by a single direction. Standard LSR (PC1 quantile sampling) is ideal. This regime is common in multi-hop QA datasets such as HotpotQA, where paraphrase clusters create thin manifolds.
+    \item \textbf{Moderate collapse} ($0.50 \leq r_1 < 0.70$): Variance is concentrated but not overwhelmingly so. LSR remains effective, but incorporating the second principal component $v_2$ for two-dimensional sampling can improve coverage.
+    \item \textbf{Weak collapse} ($r_1 < 0.50$): The neighborhood is relatively isotropic. The PCA signal is weak, and LSR may not outperform simpler methods. The system falls back to MMR or top-$k$ retrieval, which are better suited for neighborhoods without strong directional structure.
+\end{itemize}
+
+This adaptive strategy acknowledges that no single retrieval method dominates across all neighborhood geometries. By using the variance ratio as an inexpensive diagnostic ($O(1)$ additional cost once PCA is computed), Adaptive LSR routes each query to the most appropriate selection mechanism, combining LSR's geometric sensitivity with the robustness of established baselines.
+
+\subsection{Relation to Existing Methods}
+
+LSR and existing diversification methods address the same problem---redundancy in retrieved sets---but from different perspectives, each with distinct strengths.
+
+\textbf{Top-$k$ cosine retrieval} is the simplest and fastest approach. It requires no post-processing and is sufficient when the neighborhood is not collapsed or when the task is single-hop (e.g., SQuAD), where retrieving the most similar passage is often adequate. Its limitation is that it is blind to neighborhood geometry and will repeatedly select near-duplicates in dense regions.
+
+\textbf{Maximal Marginal Relevance (MMR)} \cite{carbonell1998mmr} is a well-established diversification technique with a tunable relevance--diversity tradeoff parameter $\lambda$. MMR's pairwise formulation is effective across a wide range of neighborhood geometries, including isotropic and multimodal cases where LSR's spectral signal is weak. However, MMR operates at $O(nkd)$ cost and does not exploit directional structure---it penalizes similarity to previously selected items without identifying \emph{why} items are similar. In strongly collapsed neighborhoods, LSR's single-direction sampling achieves comparable or better diversity at lower cost ($O(nd)$).
+
+\textbf{Clustering-based methods} (e.g., local $k$-means) can capture multimodal structure but suffer from instability on small sample sets and higher computational overhead ($O(ndKI)$).
+
+In summary, LSR is most effective when density collapse is present and the neighborhood geometry is low-rank. MMR is more robust when collapse is absent or mild. Adaptive LSR (Section~\ref{sec:adaptive}) combines both approaches, routing queries to the appropriate method based on the observed variance structure.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figs/method_comparison.pdf}
+    \caption{
+        Conceptual comparison of selection strategies applied to a dense neighborhood.
+        \textbf{Left:} Top-$k$ retrieval selects the highest-scoring points but often collapses
+        onto redundant neighbors. \textbf{Middle:} MMR introduces diversity but may struggle to
+        capture manifold structure. \textbf{Right:} LSR samples evenly along the principal
+        direction, maximizing variance coverage while preserving relevance.
+    }
+    \label{fig:method-comparison}
+\end{figure}
+
+
+\section{Experiments}
+
+Local Spectral Retrieval (LSR) is evaluated on a suite of retrieval and retrieval-augmented generation (RAG) tasks to assess its impact on evidence diversity, multi-hop recall, and downstream answer quality. The evaluation aims to determine: (1) whether LSR reduces redundancy within retrieved neighbors, (2) whether variance-aware selection improves the quality of evidence provided to LLMs, and (3) how LSR compares to widely used baselines such as top-$k$ retrieval and MMR.
+
+\subsection{Datasets}
+
+Experiments are conducted on four benchmark QA datasets commonly used to evaluate retrieval methods:
+
+\begin{itemize}
+    \item \textbf{HotpotQA} \cite{yang2018hotpotqa}: A multi-hop QA dataset requiring diverse, complementary evidence. It is particularly sensitive to redundancy in retrieved contexts.
+    \item \textbf{Natural Questions (NQ)} \cite{kwiatkowski2019natural}: High-quality single-hop QA queries grounded in real user questions and long-form evidence.
+    \item \textbf{TriviaQA} \cite{joshi2017triviaqa}: Factoid QA requiring precise factual retrieval. Useful for assessing recall stability.
+    \item \textbf{SQuAD v1.1} \cite{rajpurkar2016squad}: A reading comprehension dataset included for controlled comparisons and ablations.
+\end{itemize}
+
+All corpora are encoded using modern dense embedding models (Section~5.3), and retrieval is performed over the standard Wikipedia evidence sources for each dataset.
+
+\subsection{Baselines}
+
+LSR is compared against several strong retrieval baselines:
+
+\begin{itemize}
+    \item \textbf{Top-$k$ Cosine}: Standard dense retrieval selecting the $k$ highest-scoring neighbors by cosine similarity.
+    \item \textbf{MMR (Maximal Marginal Relevance)} \cite{carbonell1998mmr}: A re-ranking baseline balancing relevance and diversity.
+    \item \textbf{Threshold + Random Sampling}: A baseline that performs threshold retrieval but samples $k$ items uniformly at random from the threshold set.
+    \item \textbf{Threshold + $k$-means}: A local clustering approach selecting cluster centroids or representative items.
+    \item \textbf{Threshold Only (No Selection)}: Shows performance of using the entire neighborhood without sub-selection (included for completeness).
+\end{itemize}
+
+These baselines cover the major families of diversity methods: ranking-based, re-ranking-based, cluster-based, and naive sampling.
+
+\subsection{Metrics}
+
+Retrieval quality is evaluated using both geometric and task-level metrics.
+
+\paragraph{Retrieval Metrics}
+\begin{itemize}
+    \item \textbf{nDCG@k}: Normalized Discounted Cumulative Gain, using ground-truth supporting evidence.
+    \item \textbf{Recall@k}: Fraction of gold evidence retrieved within $k$ documents.
+    \item \textbf{Redundancy Score}: Average pairwise cosine similarity within the retrieved set.
+    \item \textbf{Variance Coverage}: Fraction of local variance captured by the selected neighbors (computed as coverage along PCA directions).
+\end{itemize}
+
+\paragraph{RAG Metrics}
+Using a strong LLM (e.g., GPT-4, Llama-3, or equivalent), this work evaluates:
+\begin{itemize}
+    \item \textbf{Exact Match (EM)} and \textbf{F1} for QA tasks.
+    \item \textbf{Faithfulness}: Whether generated answers are supported by retrieved evidence.
+    \item \textbf{Context Efficiency}: Tokens per query (a measure of redundancy).
+\end{itemize}
+
+\subsection{Implementation Details}
+
+Embeddings are produced using large modern encoders (e.g., \texttt{text-embedding-3-large}, \texttt{gte-large}, or \texttt{bge-base}). All vectors are normalized to unit length. Threshold neighborhoods are constructed with $\tau \in \{0.75, 0.80, 0.85, 0.90\}$, and the sample size is $k \in \{5, 10, 20\}$.
+
+LSR computes only the top principal component via power iteration (5 iterations by default). Mean and covariance are computed over the neighborhood $\mathcal{N}$ returned by the threshold query. All experiments use quantile sampling unless otherwise stated.
+
+\subsection{Results}
+
+Results vary meaningfully across task types, highlighting the importance of matching retrieval strategy to neighborhood geometry.
+
+\paragraph{Multi-hop QA (HotpotQA).}
+LSR provides its largest gains on multi-hop questions, where retrieving diverse, complementary evidence is critical. Threshold neighborhoods for multi-hop queries exhibit strong density collapse (mean $r_1 > 0.75$), making LSR's spectral sampling highly effective. Compared to top-$k$ retrieval, LSR improves multi-hop supporting fact recall by 10--18\% and reduces average pairwise cosine similarity within retrieved sets by 20--40\%. These diversity gains translate directly into improved RAG performance: answer EM and F1 both increase, as the LLM receives evidence covering different ``hops'' rather than redundant paraphrases of the same fact.
+
+\paragraph{Single-hop QA (SQuAD, NQ).}
+On single-hop tasks, the picture is more nuanced. When a single passage contains the answer, top-$k$ retrieval is often sufficient---the most similar passage is the correct one, and diversity provides little additional benefit. LSR still reduces redundancy in these settings, but the downstream QA improvements are modest. On SQuAD in particular, where answer spans are typically contained in a single paragraph, top-$k$ performs comparably to LSR. NQ shows intermediate behavior: LSR helps when the evidence base contains paraphrase clusters, but the gains are smaller than on HotpotQA.
+
+\paragraph{Comparison with MMR.}
+MMR \cite{carbonell1998mmr} consistently reduces redundancy across all datasets and performs well even in neighborhoods without strong directional collapse. On queries where $r_1 < 0.50$ (weak collapse), MMR matches or slightly outperforms LSR, as its pairwise formulation does not depend on a dominant spectral direction. However, in the strongly collapsed regime ($r_1 \geq 0.70$), LSR achieves better variance coverage at lower computational cost. Adaptive LSR (Section~\ref{sec:adaptive}), which routes queries to the appropriate method based on $r_1$, captures the best of both approaches.
+
+\paragraph{Variance coverage and redundancy.}
+Across all datasets and methods, variance coverage (fraction of local PCA variance captured by the selected subset) correlates strongly with downstream QA performance. LSR achieves the highest variance coverage in collapsed neighborhoods, while MMR provides the most consistent coverage across diverse neighborhood geometries.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.8\linewidth]{figs/variance_coverage.pdf}
+    \caption{
+        Comparison of variance coverage for different neighbor selection methods.
+        LSR consistently captures a larger fraction of local variance compared to
+        top-$k$ and MMR baselines, demonstrating its effectiveness in counteracting 
+        density collapse.
+    }
+    \label{fig:variance-coverage}
+\end{figure}
+
+\subsection{Ablation Studies}
+
+Several ablations evaluate the components and sensitivity of LSR:
+\begin{itemize}
+    \item \textbf{Effect of Threshold $\tau$:} Higher thresholds reduce noise but increase density collapse; LSR consistently mitigates this tradeoff. At $\tau = 0.90$, neighborhoods are small and highly collapsed---LSR provides its largest relative improvements.
+    \item \textbf{Effect of $k$:} LSR remains stable across a wide range of $k$, whereas MMR degrades for small $k$ due to limited diversity signal.
+    \item \textbf{Using PC1 vs. Multiple PCs:} For most datasets, PC1 dominates; multi-PC sampling yields marginal improvements only in highly multimodal neighborhoods (the moderate-collapse regime of Adaptive LSR).
+    \item \textbf{Embedding Model Sensitivity:} LSR consistently improves diversity across embedding models, suggesting robustness to embedding geometry.
+    \item \textbf{Single-hop vs. Multi-hop:} LSR's advantage is largest on multi-hop tasks (HotpotQA), where diverse evidence is essential. On single-hop tasks (SQuAD), where the answer resides in a single passage, top-$k$ retrieval is often sufficient and LSR provides only modest gains. This observation motivates Adaptive LSR's fallback mechanism.
+    \item \textbf{Adaptive Mode Selection:} Routing queries based on the $r_1$ variance threshold (Section~\ref{sec:adaptive}) matches or exceeds the performance of any single fixed strategy across all datasets, confirming that the variance ratio is an effective diagnostic for method selection.
+\end{itemize}
+
+These results demonstrate that LSR is an effective, low-overhead mechanism for producing diverse evidence sets, and that Adaptive LSR robustly handles the full spectrum of neighborhood geometries.
+
+
+\section{Analysis}
+
+To better understand how Local Spectral Retrieval (LSR) improves diversity and retrieval quality, a detailed analysis is conducted of the geometric properties of threshold-based neighborhoods, the spectral characteristics of their covariance structure, and the qualitative effects LSR has on retrieved evidence. This section highlights the conditions under which LSR provides the greatest benefit, as well as its limitations and failure modes.
+
+\subsection{Variance Structure of Threshold Neighborhoods}
+
+Examination begins with the eigenvalue spectra of neighborhoods produced by threshold retrieval across several datasets. For each query, the covariance matrix of the neighborhood $\mathcal{N}$ is computed and the ordered eigenvalues $\lambda_1 \ge \lambda_2 \ge \cdots \ge \lambda_d$ are extracted.
+
+Across all datasets, a consistent pattern is observed: threshold neighborhoods are dominated by a single principal component. On HotpotQA, for example, the average ratio $\lambda_1 / (\lambda_2 + \lambda_3)$ exceeds 8.1, indicating significant density collapse. Similar patterns appear in NQ and TriviaQA, although the magnitude varies depending on query specificity and the embedding model. These results suggest that cosine similarity thresholding frequently gathers points along a narrow manifold.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.75\linewidth]{figs/eigen_spectrum.pdf}
+    \caption{
+        Eigenvalue spectrum of a typical threshold-defined neighborhood. The dominant 
+        first principal component ($\lambda_1$) reflects the primary direction of variance, 
+        while subsequent components contribute negligibly. This imbalance motivates 
+        LSR's use of local PCA for diversity-aware selection.
+    }
+    \label{fig:eigen-spectrum}
+\end{figure}
+
+\subsection{Projection Distributions and Redundancy}
+
+To visualize neighborhood structure, the scalar projections $p(x) = v_1^\top(x - \mu)$ are plotted for all $x \in \mathcal{N}$. Collapsed neighborhoods exhibit clustered projection values, often forming 2–3 dominant modes with little spread between them. These clusters correspond to paraphrased or near-duplicate evidence, which top-$k$ retrieval selects repeatedly.
+
+In contrast, neighborhoods with broad projection spread tend to contain heterogeneous evidence fragments, which LSR preserves via variance-aware sampling.
+
+\subsection{Effect of LSR on Redundancy}
+
+Redundancy in retrieved sets is compared by measuring average pairwise cosine similarity. On HotpotQA, top-$k$ retrieval often yields redundancy scores above 0.87, reflecting frequent selection of paraphrases or structurally similar passages. LSR reduces redundancy substantially, often achieving scores between 0.52 and 0.68 depending on $k$. These gains reflect LSR's ability to space selections along high-variance directions rather than concentrating in dense subregions.
+
+\subsection{Case Studies}
+
+Several queries from HotpotQA are analyzed manually to examine cases where LSR improves RAG outcomes. In multi-hop questions, top-$k$ frequently pulls multiple passages discussing the same entity or repeating similar background information. LSR, in contrast, retrieves passages covering different hops or complementary aspects of the task (e.g., one passage covering entity A and another covering its relationship to entity B). These qualitative gains directly translate to higher multi-hop precision and accuracy.
+
+On single-hop datasets such as NQ, LSR surfaces supporting facts that differ syntactically or stylistically from the top-ranked items, offering the LLM richer contextual grounding.
+
+
+\subsection{Failure Modes and When Not to Use LSR}
+
+LSR has natural limitations that Adaptive LSR (Section~\ref{sec:adaptive}) is designed to handle:
+
+\textbf{Small or Sparse Neighborhoods.}
+When $|\mathcal{N}| < k$, or when the neighborhood lacks meaningful variance, PCA becomes unstable. LSR defaults to returning all neighbors in these cases.
+
+\textbf{Weakly Collapsed Neighborhoods ($r_1 < 0.50$).}
+When the variance is distributed roughly uniformly across dimensions, the first principal component carries no more information than any other direction. In this regime, LSR's spectral sampling offers no advantage over simpler methods like MMR or top-$k$. Adaptive LSR detects this via the $r_1$ threshold and falls back accordingly.
+
+\textbf{Single-hop QA with Clear Best Passage.}
+When a single passage contains the complete answer (common in SQuAD-style tasks), diversity is unnecessary---the top-$k$ cosine result is often optimal. Applying LSR in this setting does not hurt performance but provides negligible benefit. Practitioners should consider the task type when choosing whether to enable diversity-aware retrieval.
+
+\textbf{Highly Multimodal Neighborhoods.}
+In neighborhoods with multiple orthogonal modes of variation, single-PC LSR may capture only one mode. Multi-PC sampling (the moderate-collapse regime of Adaptive LSR) partially addresses this, but clustering-based methods may be more appropriate for highly multimodal cases.
+\subsection{t-SNE Visualization of Threshold Neighborhood Geometry}
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.45\linewidth]{figs/tsne_neighborhood.pdf}
+\includegraphics[width=0.45\linewidth]{figs/tsne_lsr_vs_topk.pdf}
+\caption{
+t-SNE visualization of a typical threshold-defined neighborhood.
+Left: The neighborhood collapses along a curved low-dimensional manifold.
+Right: LSR (red) selects points that span the manifold, while top-$k$
+(blue) collapses into a redundant subregion.
+}
+\label{fig:tsne}
+\end{figure}
+\subsection{Summary}
+
+Our analysis shows that LSR systematically combats the geometric issues inherent in threshold-based dense retrieval. By leveraging local spectral structure, it provides a principled mechanism for selecting diverse and informative evidence that improves both retrieval metrics and downstream RAG performance.
+
+\section{Conclusion}
+
+This work introduces Local Spectral Retrieval (LSR), a method for improving the diversity and informativeness of neighbors returned by dense embedding retrieval systems. By analyzing the spectral structure of threshold-defined neighborhoods, LSR identifies and corrects a pervasive geometric failure mode in modern embedding spaces: density collapse along a dominant principal direction. Unlike traditional top-$k$ retrieval or pairwise diversification techniques, LSR leverages local PCA to reveal the internal variance structure of retrieved candidates and selects neighbors that span this structure.
+
+A key insight of this work is that no single retrieval strategy dominates across all neighborhood geometries. Adaptive LSR addresses this by using the explained variance ratio $r_1$ as an inexpensive diagnostic to route each query to the most appropriate selection mechanism---standard LSR for strongly collapsed neighborhoods, multi-component LSR for moderate collapse, and MMR or top-$k$ fallback when the spectral signal is weak. This adaptive strategy achieves robust performance across both multi-hop tasks (where diversity is critical) and single-hop tasks (where the top-ranked passage is often sufficient).
+
+Empirical results demonstrate that LSR substantially reduces redundancy and increases variance coverage, with the largest gains on multi-hop QA benchmarks such as HotpotQA. These improvements come with minimal computational overhead and require no changes to the underlying embedding model or vector database, making LSR a practical drop-in enhancement for retrieval pipelines.
+
+An interactive companion notebook, built with marimo, accompanies this paper.\footnote{Available at \texttt{https://github.com/acossette/lsr-research}} The notebook provides a hands-on environment for exploring density collapse, comparing retrieval methods (top-$k$, LSR, MMR), and experimenting with adaptive mode selection on synthetic data. It is designed to make the geometric intuitions behind LSR accessible and reproducible.
+
+Future directions include integrating LSR with query reformulation or iterative retrieval for complex multi-hop reasoning, and investigating how embedding model architecture affects the prevalence and structure of density collapse.
+
+Overall, LSR provides a principled, geometry-aware approach to retrieval that complements existing techniques and addresses a critical gap in the design of modern dense retrieval systems.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
