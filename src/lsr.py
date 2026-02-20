@@ -96,25 +96,60 @@ class LocalSpectralRetrieval:
     by incorporating the local geometric structure of threshold-defined neighborhoods.
     """
 
+    # Convenience presets mapping intent to lambda
+    INTENT_PRESETS = {
+        "factual": 0.9,
+        "understanding": 0.2,
+        "balanced": 0.5,
+    }
+
     def __init__(self, n_components: int = 1, sampling_method: str = "quantile",
-                 pca_norm: str = "l2"):
+                 pca_norm: str = "l2",
+                 variance_target: Optional[float] = None,
+                 max_components: int = 5,
+                 lambda_param: float = 0.0,
+                 intent: Optional[str] = None):
         """
         Initialize LSR.
 
         Args:
-            n_components: Number of principal components to use (default: 1)
+            n_components: Number of principal components to use (default: 1).
+                         Ignored if variance_target is set.
             sampling_method: Method for sampling along principal direction
                            ('quantile' or 'deterministic')
             pca_norm: Norm for PCA direction finding ('l2' or 'l1').
                      L2 (default) maximizes variance; fast via eigendecomposition.
                      L1 maximizes sum of absolute projections; robust to outliers.
+            variance_target: If set, compute enough PCs to explain this fraction
+                           of total variance (e.g. 0.80 = 80%). Overrides
+                           n_components. Capped by max_components.
+            max_components: Maximum number of PCs to compute (default: 5).
+                          Limits both computational cost and accumulated
+                          deflation error in power iteration.
+            lambda_param: Relevance-diversity tradeoff (0.0 = max diversity,
+                        1.0 = max relevance/consensus). Controls how samples
+                        are distributed along principal components: 0 spreads
+                        uniformly across the full range, 1 concentrates near
+                        the center (most typical documents). Default: 0.0.
+            intent: Convenience preset that sets lambda_param automatically.
+                   'factual' (lambda=0.9), 'understanding' (lambda=0.2),
+                   'balanced' (lambda=0.5). Overrides lambda_param if set.
         """
         self.n_components = n_components
         self.sampling_method = sampling_method
         self.pca_norm = pca_norm
+        self.variance_target = variance_target
+        self.max_components = max_components
+        if intent is not None:
+            if intent not in self.INTENT_PRESETS:
+                raise ValueError(f"Unknown intent '{intent}'. Choose from: {list(self.INTENT_PRESETS.keys())}")
+            self.lambda_param = self.INTENT_PRESETS[intent]
+        else:
+            self.lambda_param = lambda_param
         self.neighborhood_mean = None
         self.eigenvalues = None
         self.eigenvectors = None
+        self._last_info = None
 
     def threshold_retrieval(
         self,
@@ -151,11 +186,17 @@ class LocalSpectralRetrieval:
 
     def fit_local_pca(self, neighborhood: np.ndarray) -> Dict:
         """
-        Compute local PCA on the neighborhood using power iteration.
+        Compute local PCA on the neighborhood using power iteration
+        with successive deflation for multi-PC extraction.
 
-        Cost: O(T * N * d) where T ~ 10 iterations.
+        Cost per PC: O(T * N * d) where T ~ 10 iterations.
         Does NOT form the d x d covariance matrix, making it efficient
         for high-dimensional embeddings (d = 1536, 3072).
+
+        The number of PCs is determined by:
+        - variance_target (if set): compute PCs until cumulative explained
+          variance >= target, up to max_components
+        - n_components (otherwise): compute exactly this many PCs
 
         Args:
             neighborhood: Neighborhood embeddings (n, d)
@@ -166,28 +207,62 @@ class LocalSpectralRetrieval:
         if len(neighborhood) == 0:
             raise ValueError("Empty neighborhood")
 
-        # Compute mean and centered data
         self.neighborhood_mean = neighborhood.mean(axis=0)
         centered = neighborhood - self.neighborhood_mean
 
-        if self.pca_norm == "l1":
-            v1 = l1_principal_component(centered)
-            eigenvalue = float(np.sum((centered @ v1) ** 2) / len(neighborhood))
-        else:
-            v1, eigenvalue = power_iteration(centered, n_iterations=10)
-
-        # Compute total variance without forming covariance: trace(C) = sum of squared norms / n
+        # Total variance: trace(C) = sum of squared norms / n
         total_variance = float(np.sum(centered ** 2) / len(neighborhood))
-        r1 = eigenvalue / total_variance if total_variance > 1e-12 else 0.0
+        if total_variance < 1e-12:
+            self.eigenvalues = np.array([0.0])
+            self.eigenvectors = np.zeros((centered.shape[1], 1))
+            return {'eigenvalues': self.eigenvalues,
+                    'explained_variance_ratio': np.array([0.0]),
+                    'mean': self.neighborhood_mean, 'pca_norm': self.pca_norm}
 
-        self.eigenvalues = np.array([eigenvalue])
-        self.eigenvectors = v1.reshape(-1, 1)  # Store as column
+        # Determine how many PCs to compute
+        if self.variance_target is not None:
+            n_target = self.max_components
+        else:
+            n_target = self.n_components
+        n_target = min(n_target, len(neighborhood) - 1)
+
+        # Extract PCs via successive deflation
+        vecs, eigs = [], []
+        residual = centered.copy()
+        cumulative_r = 0.0
+
+        for i in range(n_target):
+            if self.pca_norm == "l1" and i == 0:
+                v = l1_principal_component(residual)
+            else:
+                v, _ = power_iteration(residual, n_iterations=10)
+
+            eig = float(np.sum((centered @ v) ** 2) / len(neighborhood))
+            r = eig / total_variance
+
+            vecs.append(v)
+            eigs.append(eig)
+            cumulative_r += r
+
+            # Deflate residual
+            proj = residual @ v
+            residual = residual - np.outer(proj, v)
+
+            # Stop early if variance target met
+            if self.variance_target is not None and cumulative_r >= self.variance_target:
+                break
+
+        self.eigenvalues = np.array(eigs)
+        self.eigenvectors = np.column_stack(vecs)  # (d, m)
+        ratios = self.eigenvalues / total_variance
 
         return {
             'eigenvalues': self.eigenvalues,
-            'explained_variance_ratio': np.array([r1]),
+            'explained_variance_ratio': ratios,
+            'cumulative_variance': cumulative_r,
+            'n_components_used': len(eigs),
             'mean': self.neighborhood_mean,
-            'pca_norm': self.pca_norm
+            'pca_norm': self.pca_norm,
         }
 
     def project_onto_principal_direction(
@@ -213,14 +288,20 @@ class LocalSpectralRetrieval:
     def sample_by_quantiles(
         self,
         projections: np.ndarray,
-        k: int
+        k: int,
+        lambda_override: Optional[float] = None
     ) -> np.ndarray:
         """
-        Sample k points by dividing projections into quantiles.
+        Sample k points by dividing projections into quantiles,
+        with lambda-controlled center biasing.
+
+        When lambda=0: uniform quantile spacing (max diversity).
+        When lambda=1: all samples from the center (max relevance).
 
         Args:
             projections: Scalar projections (n,)
             k: Number of samples to select
+            lambda_override: If set, use this lambda instead of self.lambda_param
 
         Returns:
             Indices of selected points
@@ -229,18 +310,42 @@ class LocalSpectralRetrieval:
         if k >= n:
             return np.arange(n)
 
+        lam = lambda_override if lambda_override is not None else self.lambda_param
+
         # Sort indices by projection values
         sorted_indices = np.argsort(projections)
 
-        # Select k points at quantiles
-        selected_indices = []
-        for i in range(k):
-            quantile_pos = int(i * n / k)
-            # Ensure we don't exceed array bounds
-            quantile_pos = min(quantile_pos, n - 1)
-            selected_indices.append(sorted_indices[quantile_pos])
+        # Generate uniform positions in [0, 1], then bias toward center
+        uniform_positions = np.linspace(0, 1, k, endpoint=False) + 0.5 / k
+        # Interpolate toward center (0.5): biased = uniform*(1-lam) + 0.5*lam
+        biased_positions = uniform_positions * (1.0 - lam) + 0.5 * lam
 
-        return np.array(selected_indices)
+        # Convert to array indices
+        idx_positions = (biased_positions * (n - 1)).astype(int)
+        idx_positions = np.clip(idx_positions, 0, n - 1)
+
+        selected_indices = sorted_indices[idx_positions]
+        # Deduplicate (can happen at high lambda when positions converge)
+        seen = set()
+        result = []
+        for idx in selected_indices:
+            if idx not in seen:
+                seen.add(idx)
+                result.append(idx)
+        # Fill any gaps from center outward
+        if len(result) < k:
+            center_idx = n // 2
+            for offset in range(n):
+                for candidate in [center_idx + offset, center_idx - offset]:
+                    if 0 <= candidate < n and sorted_indices[candidate] not in seen:
+                        seen.add(sorted_indices[candidate])
+                        result.append(sorted_indices[candidate])
+                    if len(result) >= k:
+                        break
+                if len(result) >= k:
+                    break
+
+        return np.array(result[:k])
 
     def sample_deterministic(
         self,
@@ -306,34 +411,146 @@ class LocalSpectralRetrieval:
         if len(neighborhood) <= k:
             return neighborhood, indices
 
-        # Step 2: Local PCA
-        self.fit_local_pca(neighborhood)
+        # Step 2: Local PCA (computes 1 or more PCs)
+        pca_info = self.fit_local_pca(neighborhood)
+        n_pcs = len(self.eigenvalues)
 
-        # Step 3: Project onto principal direction
-        projections = self.project_onto_principal_direction(neighborhood)
-
-        # Step 4: Variance-aware sampling
-        if self.sampling_method == "quantile":
-            selected_local_indices = self.sample_by_quantiles(projections, k)
+        # Step 3: Sample
+        if n_pcs == 1:
+            # Single-PC path (original, fast)
+            projections = self.project_onto_principal_direction(neighborhood)
+            if self.sampling_method == "quantile":
+                selected_local_indices = self.sample_by_quantiles(projections, k)
+            else:
+                selected_local_indices = self.sample_deterministic(projections, k)
         else:
-            selected_local_indices = self.sample_deterministic(projections, k)
+            # Multi-PC proportional allocation
+            selected_local_indices = self._multi_pc_sample(neighborhood, k)
+
+        self._last_info = {
+            'n_components_used': n_pcs,
+            'explained_variance_ratio': pca_info['explained_variance_ratio'].tolist(),
+            'cumulative_variance': pca_info.get('cumulative_variance', float(pca_info['explained_variance_ratio'][0])),
+            'pca_norm': self.pca_norm,
+        }
 
         selected_embeddings = neighborhood[selected_local_indices]
         selected_corpus_indices = indices[selected_local_indices]
 
         return selected_embeddings, selected_corpus_indices
 
+    def _multi_pc_sample(self, neighborhood: np.ndarray, k: int) -> np.ndarray:
+        """
+        Proportional allocation across multiple PCs.
+
+        Allocates k samples proportionally to eigenvalues (more samples to
+        higher-variance directions), then quantile-samples each PC independently,
+        skipping already-selected points.
+        """
+        centered = neighborhood - self.neighborhood_mean
+        n = len(neighborhood)
+        m = len(self.eigenvalues)
+
+        # Compute projections for each PC
+        all_projections = [centered @ self.eigenvectors[:, i] for i in range(m)]
+
+        # Allocate samples: proportional to eigenvalue, min 1 per PC
+        alloc = self._allocate_proportional(self.eigenvalues, k)
+
+        # Quantile-sample each PC, skipping already-selected
+        selected = set()
+        selected_list = []
+
+        lam = self.lambda_param
+
+        for pc_idx in range(m):
+            k_i = alloc[pc_idx]
+            if k_i == 0:
+                continue
+
+            proj = all_projections[pc_idx]
+            sorted_indices = np.argsort(proj)
+            available = [idx for idx in sorted_indices if idx not in selected]
+
+            if len(available) == 0:
+                continue
+
+            picks = min(k_i, len(available))
+            # Lambda-biased quantile positions
+            uniform_pos = np.linspace(0, 1, picks, endpoint=False) + 0.5 / picks
+            biased_pos = uniform_pos * (1.0 - lam) + 0.5 * lam
+            for i in range(picks):
+                pos = int(biased_pos[i] * (len(available) - 1))
+                pos = min(pos, len(available) - 1)
+                chosen = available[pos]
+                selected.add(chosen)
+                selected_list.append(chosen)
+
+        # Fill any remaining slots from PC1 (dedup overflow)
+        if len(selected_list) < k:
+            sorted_pc1 = np.argsort(all_projections[0])
+            for idx in sorted_pc1:
+                if idx not in selected:
+                    selected.add(idx)
+                    selected_list.append(idx)
+                if len(selected_list) >= k:
+                    break
+
+        return np.array(selected_list[:k])
+
+    @staticmethod
+    def _allocate_proportional(eigenvalues: np.ndarray, k: int) -> List[int]:
+        """Allocate k samples across PCs proportionally to eigenvalues, min 1 each."""
+        m = len(eigenvalues)
+        if k <= m:
+            return [1 if i < k else 0 for i in range(m)]
+
+        total = float(np.sum(eigenvalues))
+        if total < 1e-12:
+            base = k // m
+            alloc = [base] * m
+            for i in range(k - base * m):
+                alloc[i] += 1
+            return alloc
+
+        # 1 per PC + distribute remainder by eigenvalue share
+        remaining = k - m
+        weights = eigenvalues / total
+        fractional = remaining * weights
+        floors = np.floor(fractional).astype(int)
+        alloc = [1 + int(f) for f in floors]
+
+        # Distribute leftover by largest fractional remainder
+        leftover = k - sum(alloc)
+        if leftover > 0:
+            remainders = fractional - floors
+            for idx in np.argsort(-remainders)[:leftover]:
+                alloc[idx] += 1
+
+        return alloc
+
 
 class AdaptiveLSR:
     """
     Adaptive Local Spectral Retrieval.
 
-    Automatically selects the best retrieval strategy based on the
-    variance structure of the threshold neighborhood:
+    Two operating modes:
 
-    - Strong collapse (PC1 >= 70%): LSR along PC1
-    - Moderate collapse (PC1 50-70%): LSR along PC1 + PC2
-    - Weak collapse (PC1 < 50%): Falls back to MMR
+    **Threshold mode** (default, ``variance_target=None``):
+        Routes queries based on fixed r1 cutoffs:
+        - Strong collapse (r1 >= 70%): LSR along PC1
+        - Moderate collapse (r1 50-70%): LSR along PC1 + PC2
+        - Weak collapse (r1 < 50%): Falls back to MMR
+
+    **Variance-target mode** (``variance_target=0.80``):
+        Computes PCs via successive deflation + power iteration until the
+        cumulative explained variance reaches the target.  Allocates k
+        samples proportionally across the retained PCs.  No MMR fallback;
+        the number of components is data-driven.
+
+        Practical ceiling: ``max_components`` (default 5) caps the number
+        of PCs to avoid diminishing returns and accumulated deflation error
+        in the power-iteration estimates.
     """
 
     def __init__(
@@ -343,12 +560,16 @@ class AdaptiveLSR:
         lambda_param: float = 0.5,
         sampling_method: str = "quantile",
         pca_norm: str = "l2",
+        variance_target: Optional[float] = None,
+        max_components: int = 5,
     ):
         self.strong_threshold = strong_threshold
         self.moderate_threshold = moderate_threshold
         self.lambda_param = lambda_param
         self.sampling_method = sampling_method
         self.pca_norm = pca_norm
+        self.variance_target = variance_target
+        self.max_components = max_components
         self._last_info = None
 
     @property
