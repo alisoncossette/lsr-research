@@ -241,6 +241,179 @@ class LocalSpectralRetrieval:
         return selected_embeddings, selected_corpus_indices
 
 
+class AdaptiveLSR:
+    """
+    Adaptive Local Spectral Retrieval.
+
+    Automatically selects the best retrieval strategy based on the
+    variance structure of the threshold neighborhood:
+
+    - Strong collapse (PC1 >= 70%): LSR along PC1
+    - Moderate collapse (PC1 50-70%): LSR along PC1 + PC2
+    - Weak collapse (PC1 < 50%): Falls back to MMR
+    """
+
+    def __init__(
+        self,
+        strong_threshold: float = 0.70,
+        moderate_threshold: float = 0.50,
+        lambda_param: float = 0.5,
+        sampling_method: str = "quantile",
+    ):
+        self.strong_threshold = strong_threshold
+        self.moderate_threshold = moderate_threshold
+        self.lambda_param = lambda_param
+        self.sampling_method = sampling_method
+        self._last_info = None
+
+    @property
+    def info(self) -> Optional[Dict]:
+        """Diagnostic info from the last retrieve() call."""
+        return self._last_info
+
+    def retrieve(
+        self,
+        query_embedding: np.ndarray,
+        corpus_embeddings: np.ndarray,
+        k: int,
+        threshold: float = 0.75,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Retrieve k diverse neighbors, automatically choosing the best strategy.
+
+        Args:
+            query_embedding: Query embedding (d,). Must be unit-normalized.
+            corpus_embeddings: Corpus embeddings (n, d). Must be unit-normalized.
+            k: Number of neighbors to return.
+            threshold: Cosine similarity threshold for neighborhood construction.
+
+        Returns:
+            selected_embeddings: (k, d) array of selected embeddings.
+            selected_indices: (k,) array of corpus indices.
+        """
+        # Step 1: threshold retrieval
+        similarities = corpus_embeddings @ query_embedding
+        mask = similarities >= threshold
+        candidate_indices = np.where(mask)[0]
+
+        if len(candidate_indices) == 0:
+            self._last_info = {"mode": "empty", "pc1_variance": 0.0, "n_candidates": 0}
+            return np.array([]), np.array([], dtype=int)
+
+        if len(candidate_indices) <= k:
+            self._last_info = {
+                "mode": "all",
+                "pc1_variance": 0.0,
+                "n_candidates": len(candidate_indices),
+            }
+            return corpus_embeddings[candidate_indices], candidate_indices
+
+        neighborhood = corpus_embeddings[candidate_indices]
+
+        # Step 2: local PCA
+        pca = PCA(n_components=min(3, len(neighborhood), neighborhood.shape[1]))
+        pca.fit(neighborhood)
+        r1 = float(pca.explained_variance_ratio_[0])
+
+        # Step 3: route based on variance ratio
+        if r1 >= self.strong_threshold:
+            mode = "lsr"
+            selected = self._lsr_select(neighborhood, pca, k, n_components=1)
+        elif r1 >= self.moderate_threshold:
+            mode = "lsr_2pc"
+            selected = self._lsr_select(neighborhood, pca, k, n_components=2)
+        else:
+            mode = "mmr"
+            selected = self._mmr_select(
+                neighborhood, similarities[candidate_indices], k
+            )
+
+        self._last_info = {
+            "mode": mode,
+            "pc1_variance": r1,
+            "n_candidates": len(candidate_indices),
+            "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+        }
+
+        selected_embeddings = neighborhood[selected]
+        selected_corpus_indices = candidate_indices[selected]
+        return selected_embeddings, selected_corpus_indices
+
+    def _lsr_select(
+        self, neighborhood: np.ndarray, pca: PCA, k: int, n_components: int = 1
+    ) -> np.ndarray:
+        """Select k points by quantile sampling along principal component(s)."""
+        projections = pca.transform(neighborhood)[:, 0]
+        sorted_indices = np.argsort(projections)
+        n = len(sorted_indices)
+
+        if n_components == 1 or pca.n_components_ < 2:
+            return np.array(
+                [sorted_indices[int(i * n / k)] for i in range(k)]
+            )
+
+        # 2-component grid sampling
+        proj2d = pca.transform(neighborhood)[:, :2]
+        grid_k = max(2, int(np.sqrt(k)))
+        q1 = np.linspace(0, 1, grid_k + 1)
+        selected = []
+        for i in range(grid_k):
+            for j in range(grid_k):
+                lo1 = np.quantile(proj2d[:, 0], q1[i])
+                hi1 = np.quantile(proj2d[:, 0], q1[i + 1])
+                lo2 = np.quantile(proj2d[:, 1], q1[j])
+                hi2 = np.quantile(proj2d[:, 1], q1[j + 1])
+                cell_mask = (
+                    (proj2d[:, 0] >= lo1) & (proj2d[:, 0] <= hi1)
+                    & (proj2d[:, 1] >= lo2) & (proj2d[:, 1] <= hi2)
+                )
+                cell_indices = np.where(cell_mask)[0]
+                if len(cell_indices) > 0:
+                    selected.append(cell_indices[0])
+                if len(selected) >= k:
+                    break
+            if len(selected) >= k:
+                break
+
+        # Fill remaining slots with PC1 quantile sampling if needed
+        if len(selected) < k:
+            remaining = set(range(n)) - set(selected)
+            remaining_by_pc1 = sorted(remaining, key=lambda i: projections[i])
+            step = max(1, len(remaining_by_pc1) // (k - len(selected)))
+            for idx in remaining_by_pc1[::step]:
+                selected.append(idx)
+                if len(selected) >= k:
+                    break
+
+        return np.array(selected[:k])
+
+    def _mmr_select(
+        self, neighborhood: np.ndarray, relevances: np.ndarray, k: int
+    ) -> np.ndarray:
+        """Fallback MMR selection for weakly collapsed neighborhoods."""
+        selected = [int(np.argmax(relevances))]
+
+        for _ in range(k - 1):
+            best_score = -np.inf
+            best_idx = -1
+            for j in range(len(neighborhood)):
+                if j in selected:
+                    continue
+                redundancy = max(
+                    neighborhood[j] @ neighborhood[s] for s in selected
+                )
+                score = (
+                    self.lambda_param * relevances[j]
+                    - (1 - self.lambda_param) * redundancy
+                )
+                if score > best_score:
+                    best_score = score
+                    best_idx = j
+            selected.append(best_idx)
+
+        return np.array(selected)
+
+
 class TopKRetrieval:
     """Standard top-k cosine similarity retrieval baseline."""
 

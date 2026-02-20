@@ -1,70 +1,110 @@
-# Local Spectral Retrieval (LSR)
+# LSR: Local Spectral Retrieval
 
-**Variance-aware neighbor selection via PCA in thresholded embedding neighborhoods.**
+**Drop-in diversity for embedding retrieval.** LSR detects when your nearest neighbors are redundant and automatically selects a diverse, non-redundant subset — no retraining, no model changes.
 
-LSR addresses the *density collapse* problem in embedding-based retrieval: when threshold-based similarity search gathers many near-duplicate documents along a low-dimensional manifold, standard top-k selection returns redundant results. LSR detects this collapse using local PCA and selects documents that maximize variance coverage along the dominant principal direction.
+## The Problem
 
-## What's Here
+When you retrieve the top-k nearest embeddings, you often get k copies of the same thing. Paraphrases, near-duplicates, boilerplate — they all cluster in embedding space. This is especially bad for RAG and multi-hop QA, where you need *different* pieces of evidence, not the same fact repeated five ways.
 
-| Path | Description |
-|------|-------------|
-| `lsr_interactive.py` | **Interactive marimo notebook** — the best way to explore LSR. Run it to see density collapse, compare methods (top-k, LSR, MMR), and experiment with adaptive mode selection. |
-| `docs/document.tex` | **Research paper** — formal treatment of the method, adaptive LSR, and empirical analysis. |
-| `docs/figs/` | Paper figures (generated from `docs/generate_figures.py`). |
-| `src/` | Core Python implementation: `lsr.py`, `metrics.py`, `embeddings.py`. |
-| `experiments/` | Experiment scripts for HotpotQA, Natural Questions, etc. |
+## The Fix
 
-## Quick Start
+LSR runs PCA on the local neighborhood of your query and samples points that span the principal direction of variation. It takes a few milliseconds and slots in after your existing vector search.
 
-### Interactive Notebook (Recommended)
+**Adaptive LSR** goes further — it checks *whether* the neighborhood is actually collapsed before applying spectral sampling. If it's not, it falls back to MMR or top-k. No wasted computation on neighborhoods that don't need it.
+
+## Install
 
 ```bash
-pip install marimo numpy scikit-learn plotly
+pip install lsr-retrieval
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/acossette/lsr-research.git
+cd lsr-research
+pip install -e .
+```
+
+## Usage
+
+```python
+from lsr import AdaptiveLSR
+import numpy as np
+
+# Your embeddings (must be unit-normalized)
+corpus = np.random.randn(1000, 256)
+corpus /= np.linalg.norm(corpus, axis=1, keepdims=True)
+query = np.random.randn(256)
+query /= np.linalg.norm(query)
+
+# Retrieve 10 diverse neighbors
+retriever = AdaptiveLSR()
+embeddings, indices = retriever.retrieve(query, corpus, k=10, threshold=0.3)
+
+# Check what strategy was used
+print(retriever.info)
+# {'mode': 'lsr', 'pc1_variance': 0.82, 'n_candidates': 47, ...}
+```
+
+### What `mode` tells you
+
+| Mode | PC1 Variance | What happened |
+|------|-------------|---------------|
+| `lsr` | >= 70% | Strong collapse detected. LSR sampled along PC1. |
+| `lsr_2pc` | 50-70% | Moderate collapse. LSR sampled on PC1 + PC2 grid. |
+| `mmr` | < 50% | Weak collapse. Fell back to MMR diversification. |
+| `all` | — | Neighborhood had <= k points. Returned everything. |
+
+### Using standard LSR (no adaptive routing)
+
+```python
+from lsr import LocalSpectralRetrieval
+
+retriever = LocalSpectralRetrieval(n_components=1)
+embeddings, indices = retriever.retrieve(query, corpus, k=10, threshold=0.3)
+```
+
+### Baselines included
+
+```python
+from lsr import TopKRetrieval, MMRRetrieval
+
+topk = TopKRetrieval()
+mmr = MMRRetrieval()
+
+emb_topk, idx_topk = topk.retrieve(query, corpus, k=10)
+emb_mmr, idx_mmr = mmr.retrieve(query, corpus, k=10, threshold=0.3, lambda_param=0.5)
+```
+
+## Works with any embeddings
+
+LSR operates on the geometry of your vectors, not the content. It works with:
+- **Text** (OpenAI, Cohere, sentence-transformers, etc.)
+- **Images** (CLIP, DINOv2, etc.)
+- **Video** (frame embeddings, clip-level features)
+- **Audio** (wav2vec, CLAP, etc.)
+- Any domain where you have dense embeddings and a cosine similarity threshold
+
+## When to use LSR
+
+| Situation | Use |
+|-----------|-----|
+| Multi-hop QA (HotpotQA-style) | **LSR** — you need diverse evidence |
+| RAG with redundant retrieved contexts | **LSR** — reduce token waste |
+| Single-hop QA (SQuAD-style) | **Top-k** — closest passage is usually right |
+| Uncertain if collapse exists | **AdaptiveLSR** — it checks for you |
+
+## Interactive Demo
+
+```bash
+pip install lsr-retrieval[notebook]
 marimo edit lsr_interactive.py
 ```
 
-The notebook walks through:
-1. How density collapse happens in embedding neighborhoods
-2. Why top-k retrieval fails in collapsed regions
-3. How LSR uses PCA to select diverse, non-redundant documents
-4. **Adaptive LSR** — automatic mode selection based on variance coverage
-5. When to use LSR vs. MMR vs. top-k (single-hop vs. multi-hop QA)
+## Paper
 
-### Paper
-
-```bash
-cd docs && pdflatex document.tex && bibtex document && pdflatex document.tex && pdflatex document.tex
-```
-
-## The LSR Algorithm
-
-1. **Threshold retrieval**: Gather all documents with cosine similarity >= tau
-2. **Local PCA**: Compute principal components of the neighborhood
-3. **Project**: Map documents to their position along PC1
-4. **Quantile sample**: Select k documents evenly spaced along PC1
-
-**Adaptive LSR** checks the variance ratio before choosing a strategy:
-- **PC1 >= 70%** (strong collapse): Standard LSR — ideal regime
-- **PC1 50-70%** (moderate): Multi-component LSR using PC1 + PC2
-- **PC1 < 50%** (weak collapse): Falls back to MMR or top-k
-
-## Key Findings
-
-- LSR improves multi-hop QA recall by 10-18% on HotpotQA
-- Reduces pairwise redundancy by 20-40%
-- Single-hop tasks (SQuAD) don't benefit much — top-k is often sufficient
-- MMR is better when density collapse is absent; LSR is better when it's present
-- Adaptive LSR combines both, routing per-query based on the variance signal
-
-## Requirements
-
-```
-numpy>=1.24.0
-scikit-learn>=1.3.0
-matplotlib>=3.7.0
-marimo>=0.9.0
-plotly>=5.0.0
-```
+The full method, analysis, and experiments are in [docs/document.tex](docs/document.tex).
 
 ## Citation
 

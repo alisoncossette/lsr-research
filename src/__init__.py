@@ -6,6 +6,7 @@ geometric structure in threshold-defined neighborhoods.
 """
 
 from .lsr import (
+    AdaptiveLSR,
     LocalSpectralRetrieval,
     TopKRetrieval,
     ThresholdRandomRetrieval,
@@ -30,6 +31,7 @@ __version__ = "0.1.0"
 __author__ = "Alison Cossette"
 
 __all__ = [
+    "AdaptiveLSR",
     "LocalSpectralRetrieval",
     "TopKRetrieval",
     "ThresholdRandomRetrieval",

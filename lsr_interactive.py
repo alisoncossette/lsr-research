@@ -1250,17 +1250,14 @@ def _(mo):
 def _(mo):
     mo.callout(
         mo.md("""
-        **Built with marimo** — the reactive notebook for Python
+        **Local Spectral Retrieval (LSR)**
 
-        This notebook showcases:
-        - Reactive execution (change a slider, everything updates!)
-        - Interactive widgets (sliders, radio buttons, run buttons)
-        - Rich Plotly visualizations with 3D projections
-        - Adaptive analysis with real-time feedback
-        - Dark mode theming
-        - Pure Python (git-friendly, no hidden state!)
+        This is the interactive companion to the LSR paper:
+        *"Variance-Aware Neighbor Selection via PCA in Thresholded Embedding Neighborhoods"*
 
-        [Star marimo on GitHub](https://github.com/marimo-team/marimo)
+        - Paper and source: [github.com/acossette/lsr-research](https://github.com/acossette/lsr-research)
+        - Install: `pip install lsr-retrieval`
+        - Built with [marimo](https://github.com/marimo-team/marimo) — the reactive Python notebook
         """),
         kind="info"
     )
@@ -1274,15 +1271,13 @@ def _(mo):
         "Secret Developer Notes": mo.md("""
         Hey, you found me!
 
-        This notebook was built by **Alison Cossette** to demonstrate both:
-        1. The LSR algorithm for diversity-aware retrieval
-        2. What marimo can do as a teaching/demo platform
+        This notebook was built by **Alison Cossette** as the interactive companion
+        to the LSR paper. The gamification makes learning more engaging, the reactive
+        widgets let you build intuition through experimentation, and the dark theme
+        just looks cool.
 
-        The gamification (scores, grades, leaderboards) makes learning more engaging.
-        The reactive widgets let users build intuition through experimentation.
-        The dark theme... just looks cool.
-
-        Want to hire me for DevRel? Let's talk!
+        See the full paper and `pip install lsr-retrieval` at:
+        [github.com/acossette/lsr-research](https://github.com/acossette/lsr-research)
 
         *P.S. Try setting the seed to 1337 for a special configuration...*
         """)
