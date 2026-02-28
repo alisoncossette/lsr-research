@@ -7,7 +7,7 @@
 \usepackage{hyperref}
 \usepackage{booktabs}
 
-\title{Local Spectral Retrieval: Variance-Aware Neighbor Selection via PCA in Thresholded Embedding Neighborhoods}
+\title{Local Spectral Retrieval: Variance-Aware Neighbor Selection via PCA in Thresholded Embedding Neighborhoods\thanks{A provisional patent application covering the methods described in this work has been filed (U.S. Provisional Application, February 2026).}}
 
 \author{
   Alison Cossette \\
@@ -19,7 +19,7 @@
 \maketitle
 
 \begin{abstract}
-This paper introduces \textbf{Local Spectral Retrieval (LSR)}, a retrieval method that improves embedding-based search by incorporating the local geometric structure of threshold-defined neighborhoods. Traditional cosine-based retrieval treats each neighbor independently and is insensitive to redundancy caused by density collapse. LSR first performs radius-based retrieval using a minimum cosine similarity threshold, then applies Principal Component Analysis to the resulting neighborhood. It then samples $k$ neighbors that maximize variance along the dominant principal direction, producing a diverse, non-redundant set of documents. Experiments on synthetic and real-world benchmarks demonstrate that LSR reduces redundancy, improves multi-hop recall, and is particularly effective for retrieval tasks that require broad understanding of a topic rather than a single factual answer. In production settings, the $O(Nd)$ complexity of LSR also yields substantial latency improvements over pairwise diversity methods such as MMR.
+This paper introduces \textbf{Local Spectral Retrieval (LSR)}, a retrieval method that improves embedding-based search by incorporating the local geometric structure of threshold-defined neighborhoods. Traditional cosine-based retrieval treats each neighbor independently and is insensitive to redundancy caused by density collapse. LSR first performs radius-based retrieval using a minimum cosine similarity threshold, then applies Principal Component Analysis to the resulting neighborhood. It then samples $k$ neighbors that maximize variance along the dominant principal direction, producing a diverse, non-redundant set of documents. Experiments on a production documentation corpus (15,292 Neo4j chunks) demonstrate that LSR reduces redundancy by up to 20.2\% over top-$k$ in collapsed neighborhoods, outperforming MMR's 17.3\%. More broadly, LSR provides a spectral framework that (a) \emph{diagnoses} when diversification is needed via the PC1 variance ratio $r_1$, (b) \emph{performs} it in $O(Nd)$ time when it is, and (c) \emph{enables} diversity-aware retrieval in latency-sensitive pipelines---including visual and embodied RAG---where pairwise methods like MMR are too slow. In timing benchmarks across embedding dimensions up to 3,072, LSR achieves 31--388$\times$ speedup over MMR.
 \end{abstract}
 
 
@@ -54,7 +54,7 @@ Modern vector databases such as FAISS\cite{johnson2019billion}, Milvus, and Open
 Radius-based search is supported by modern ANN systems including FAISS \cite{johnson2019billion}, Milvus, and HNSW-based methods \cite{malkov2018efficient}.
 
 \subsection{Diversified Retrieval and Re-ranking}
-To counter redundancy in top-$k$ retrieval, several diversification techniques have been proposed. Maximal Marginal Relevance (MMR) \cite{carbonell1998mmr} and more recent neural variants \cite{ray2023learning} aim to balance relevance and novelty by penalizing similarity to previously selected items. Other approaches leverage submodular optimization \cite{lin2012learning}, clustering-based selection \cite{xia2022dense}, or coverage-based scoring to improve diversity. While effective, these methods operate on pairwise similarities among candidates and do not incorporate geometric information such as principal directions or eigenvalue structure. As a result, they remain less sensitive to low-dimensional collapse within high-density regions.
+To counter redundancy in top-$k$ retrieval, several diversification techniques have been proposed. Maximal Marginal Relevance (MMR) \cite{carbonell1998mmr} aims to balance relevance and novelty by penalizing similarity to previously selected items. Other approaches leverage submodular optimization \cite{lin2012learning}, clustering-based selection \cite{xia2022dense}, or coverage-based scoring to improve diversity. While effective, these methods operate on pairwise similarities among candidates and do not incorporate geometric information such as principal directions or eigenvalue structure. As a result, they remain less sensitive to low-dimensional collapse within high-density regions.
 
 \subsection{PCA and Spectral Methods in Retrieval}
 Principal Component Analysis and related spectral methods have been widely used for dimensionality reduction, clustering, and indexing. PCA-trees \cite{sproull1991pca} and spectral partitioning methods exploit principal directions to construct efficient search structures, but these techniques focus on global or recursive partitioning and do not use PCA to analyze local neighborhoods returned by similarity search. More recent work on dimensionality-reduced retrieval for RAG \cite{park2024pca} applies PCA to embeddings globally, typically for compression or efficiency, not for diversity-aware neighbor selection. In contrast, LSR performs \emph{local} PCA on the threshold-defined region, using spectral variance directly to guide neighbor selection.
@@ -141,7 +141,8 @@ Local Spectral Retrieval (LSR) instantiates the selection problem by projecting 
 \STATE \textbf{Input:} query $q$, dataset $X$, threshold $\tau$, sample size $k$
 \STATE $\mathcal{N} \leftarrow \{ x \in X : \cos(q,x) \geq \tau \}$
 \IF{$|\mathcal{N}| \leq k$}
-  \RETURN $\mathcal{N}$
+  \STATE augment $\mathcal{N}$ with top-$(k - |\mathcal{N}|)$ neighbors by cosine similarity
+  \RETURN augmented $\mathcal{N}$
 \ENDIF
 \STATE compute $\mu$ and covariance $C$
 \STATE compute top eigenvector $v_1$ and eigenvalues $\lambda_1, \ldots, \lambda_d$
@@ -160,7 +161,8 @@ Local Spectral Retrieval (LSR) instantiates the selection problem by projecting 
 \STATE \textbf{Input:} query $q$, dataset $X$, threshold $\tau$, sample size $k$
 \STATE $\mathcal{N} \leftarrow \{ x \in X : \cos(q,x) \geq \tau \}$
 \IF{$|\mathcal{N}| \leq k$}
-  \RETURN $\mathcal{N}$
+  \STATE augment $\mathcal{N}$ with top-$(k - |\mathcal{N}|)$ neighbors by cosine similarity
+  \RETURN augmented $\mathcal{N}$
 \ENDIF
 \STATE compute PCA on $\mathcal{N}$; obtain $r_1 = \lambda_1 / \sum_j \lambda_j$
 \IF{$r_1 \geq 0.70$}
@@ -188,7 +190,7 @@ Given a query embedding $q$, LSR begins by constructing the high-recall neighbor
 \end{equation}
 where $\tau$ is a similarity threshold. This operation is supported by most vector databases and efficiently executed using approximate nearest neighbor (ANN) indexes. Threshold retrieval typically yields a set whose size $|\mathcal{N}|$ varies with corpus density and query specificity.
 
-If $|\mathcal{N}| \le k$, LSR simply returns all retrieved items. Otherwise, the method proceeds to variance analysis.
+If $|\mathcal{N}| \le k$, the threshold neighborhood alone cannot satisfy the request. In this case, LSR returns all items in $\mathcal{N}$ and augments the set with the next most similar items from the corpus (by cosine similarity) until $k$ items are reached. This guarantees that the system always returns exactly $k$ results---a requirement for downstream consumers that expect a fixed context size. When $|\mathcal{N}| > k$, the method proceeds to variance analysis.
 
 \subsection{Step 2: Local PCA on the Retrieved Neighborhood}
 PCA-based neighborhood analysis has long been used to characterize local manifold structure \cite{sproull1991pca}.
@@ -201,9 +203,11 @@ and covariance
     C = \frac{1}{|\mathcal{N}|} \sum_{x \in \mathcal{N}} (x - \mu)(x - \mu)^\top.
 \end{equation}
 
-The leading eigenvector $v_1$ of $C$ is then computed, corresponding to the principal direction of maximum variance. In practice, computing only the top eigenpair is sufficient, and efficient power iteration makes this step inexpensive even for high-dimensional embeddings.
-
-A key observation is that density collapse manifests as a dominant $\lambda_1$; thus, selecting points that spread along $v_1$ captures the essential variability of the region.
+The leading eigenvector $v_1$ of $C$ is computed via power iteration in $O(TNd)$ time, identifying the principal direction of variance---and, in collapsed neighborhoods, the axis along which redundancy concentrates. The explained variance ratio
+\begin{equation}
+    r_1 = \frac{\lambda_1}{\sum_{j=1}^{d} \lambda_j}
+\end{equation}
+quantifies how much of the neighborhood's structure this single direction captures. When $r_1$ is high ($\geq 0.70$), spreading selections along $v_1$ alone recovers the essential variability of the region. When $r_1$ is moderate ($0.50$--$0.70$), successive deflation extracts additional principal components at the same per-component cost, extending coverage to a multi-dimensional subspace. This connects the spectral analysis directly to the adaptive routing framework (Section~\ref{sec:adaptive}): $r_1$ serves as both a diagnostic of collapse severity and a decision criterion for strategy selection.
 
 \subsection{Step 3: Projection onto the Dominant Direction}
 
@@ -240,6 +244,15 @@ In this work, quantile sampling is used due to its robustness and interpretabili
 \end{equation}
 
 This ensures that $\mathcal{S}$ spans the local principal axis, maximizing variance coverage and minimizing redundancy.
+
+\paragraph{Relevance--diversity tradeoff ($\lambda$ parameter).}
+The quantile sampling step admits a natural tradeoff between diversity and relevance. A parameter $\lambda \in [0, 1]$ controls where along the principal axis samples are drawn by biasing the quantile positions toward the center of the projection distribution:
+\begin{equation}
+    q_i^{(\lambda)} = q_i^{(\text{uniform})} \cdot (1 - \lambda) + 0.5 \cdot \lambda, \quad i = 1, \ldots, k,
+\end{equation}
+where $q_i^{(\text{uniform})} = (i - 0.5)/k$ are the uniform quantile positions. At $\lambda = 0$, positions are uniformly spaced across the full projection range, maximizing diversity. At $\lambda = 1$, all positions converge to 0.5 (the center), selecting items nearest the neighborhood consensus. Intermediate values interpolate smoothly between these extremes.
+
+This parameter can be set directly or via \emph{intent presets} that map task categories to appropriate values: \texttt{factual} ($\lambda = 0.9$, prioritizing consensus), \texttt{balanced} ($\lambda = 0.5$), and \texttt{understanding} ($\lambda = 0.2$, prioritizing breadth). The $\lambda$ parameter composes with the two-layer decision framework described in Section~\ref{sec:adaptive}: the outer layer determines whether diversity-aware retrieval is needed, $\lambda$ controls the diversity--relevance balance within LSR, and $r_1$ tunes the internal strategy. Crucially, adjusting $\lambda$ changes only the $O(k)$ index computation---it adds no overhead to the $O(TNd)$ spectral analysis.
 
 \subsection{Computational Complexity}
 
@@ -445,7 +458,7 @@ This complexity difference has a practical consequence beyond raw speed: because
 This scaling property is especially relevant for (a) high-dimensional embedding models now standard in production (1,536--3,072 dimensions) and (b) modalities with large retrieval depths: video retrieval (selecting $k\!=\!50$--200 keyframes), recommendation systems ($k\!=\!50$--500 candidates), and robotics ($k\!=\!100$+ scene embeddings). In these settings, MMR's $O(Nk^2d)$ cost becomes prohibitive, while LSR remains practical.
 
 \paragraph{Controlled synthetic validation.}
-The companion notebook provides controlled experiments on synthetic neighborhoods with parameterized collapse strength, cluster count, and embedding dimension. These confirm the expected behavior: LSR's advantage over top-$k$ grows monotonically with $r_1$, reaching full cluster coverage at $r_1 \geq 0.95$ while top-$k$ collapses onto a single paraphrase group. MMR provides strong diversity across all regimes but at higher computational cost. In weakly collapsed neighborhoods ($r_1 < 0.50$), MMR matches or exceeds LSR, motivating the Adaptive routing strategy. Full parameter sweeps are reproducible in the interactive notebook.\footnote{Available at \texttt{https://github.com/alisoncossette/lsr-research}}
+The companion notebook provides controlled experiments on synthetic neighborhoods with parameterized collapse strength, cluster count, and embedding dimension. These confirm the expected behavior: LSR's advantage over top-$k$ grows monotonically with $r_1$, reaching full cluster coverage at $r_1 \geq 0.95$ while top-$k$ collapses onto a single paraphrase group. MMR provides strong diversity across all regimes but at higher computational cost. In weakly collapsed neighborhoods ($r_1 < 0.50$), MMR matches or exceeds LSR, motivating the Adaptive routing strategy. Full parameter sweeps are reproducible in the interactive notebook.\footnote{Available upon request from the corresponding author.}
 
 \paragraph{Variance coverage.}
 Across both synthetic and real neighborhoods, variance coverage (fraction of local PCA variance captured by the selected subset) correlates with diversity: methods that achieve higher variance coverage also produce less redundant selections. LSR maximizes variance coverage in collapsed neighborhoods by construction, as quantile sampling along the dominant principal direction directly optimizes this metric.
@@ -484,6 +497,20 @@ To better understand how Local Spectral Retrieval (LSR) improves diversity and r
 \subsection{Variance Structure of Threshold Neighborhoods}
 
 Examination begins with the eigenvalue spectra of neighborhoods produced by threshold retrieval across several datasets. For each query, the covariance matrix of the neighborhood $\mathcal{N}$ is computed and the ordered eigenvalues $\lambda_1 \ge \lambda_2 \ge \cdots \ge \lambda_d$ are extracted.
+
+Figure~\ref{fig:corpus-density} provides a corpus-level view via t-SNE projection of all 15,292 Neo4j documentation embeddings. The left panel colors each document by local embedding density (estimated via kernel density estimation on the 2D projection), revealing natural clusters where documents pile up---typically boilerplate content, templated pages, and paraphrase groups. The right panel colors the same layout by each document's neighborhood collapse severity ($r_1$, computed over its top-50 neighbors). The co-localization is striking: the densest embedding regions are precisely the regions with the highest $r_1$, confirming that density collapse is a structural property of the corpus geometry, not an artifact of retrieval configuration.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figs/corpus_density.pdf}
+    \caption{
+        t-SNE projection of all 15,292 Neo4j documentation embeddings.
+        \textbf{Left:} Local embedding density, revealing natural clusters in the vector space.
+        \textbf{Right:} Neighborhood collapse severity ($r_1$), computed over each document's top-50 neighbors.
+        Dense regions co-localize with high $r_1$, confirming that density collapse arises from corpus structure.
+    }
+    \label{fig:corpus-density}
+\end{figure}
 
 The Neo4j documentation corpus reveals that density collapse is not uniform: it affects a meaningful subset of queries rather than the entire corpus. While the global PC1 ratio is modest ($\sim$5\%), local neighborhoods exhibit a heavy-tailed distribution of collapse severity. Among queries where the top-10 neighbors have average pairwise cosine similarity above 0.80 (16\% of all queries), the local $r_1$ frequently exceeds 0.50, indicating that most variance lies along a single principal direction. The most collapsed neighborhoods---corresponding to templated boilerplate content such as algorithm reference pages and configuration guides---reach $r_1 > 0.99$. These results confirm that cosine similarity thresholding frequently gathers points along a narrow manifold, particularly in corpora with repeated structural patterns.
 
@@ -552,13 +579,24 @@ Top-$k$ cosine retrieval is the right tool for factual question answering, and t
 
 Local Spectral Retrieval (LSR) fills this gap. By analyzing the spectral structure of threshold-defined neighborhoods, LSR identifies density collapse---the geometric failure mode that causes redundancy---and selects neighbors that span the local variance structure rather than clustering within it. Evaluation on a production documentation corpus (15,292 Neo4j chunks) confirms that density collapse is a genuine property of real corpora: in high-redundancy neighborhoods, LSR reduces redundancy by 20.2\% relative to top-$k$, outperforming MMR's 17.3\%.
 
-The key practical advantage is computational. LSR's $O(TNd)$ complexity, achieved via power iteration ($T \approx 10$) without forming the $d \times d$ covariance matrix, delivers 31--388$\times$ speedup over MMR across embedding dimensions from 768 to 3,072. This allows LSR to operate on much larger candidate pools within the same latency budget, scaling to the modalities where diversity matters most: video retrieval ($k\!=\!50$--200 keyframes), recommendation systems ($k\!=\!50$--500 candidates), and robotics ($k\!=\!100$+ scene embeddings).
+The key practical advantage is not merely computational but \emph{enabling}. LSR's $O(TNd)$ complexity, achieved via power iteration ($T \approx 10$) without forming the $d \times d$ covariance matrix, delivers 31--388$\times$ speedup over MMR across embedding dimensions from 768 to 3,072. This is not an incremental optimization---it changes what is feasible. A system constrained to 100ms can run LSR on 5,000 candidates at $d\!=\!3072$ but MMR on fewer than 100. Because larger candidate pools provide more material for diversification, LSR's efficiency advantage compounds into a diversity advantage at scale. This makes diversity-aware retrieval practical for the modalities and applications where it matters most: video retrieval ($k\!=\!50$--200 keyframes), recommendation systems ($k\!=\!50$--500 candidates), and robotics ($k\!=\!100$+ scene embeddings)---settings where diversity is not optional but where MMR's $O(Nk^2d)$ cost has historically forced practitioners to fall back on redundant top-$k$ selection.
 
 We frame retrieval method selection as a two-layer decision: query \emph{intent} determines whether diversity is needed (an outer, design-time choice), and the spectral diagnostic $r_1$ tunes how LSR operates internally (an inner, runtime mechanism). These layers are complementary, not competing, and compose naturally across application architectures.
 
-An interactive companion notebook, built with marimo, accompanies this paper.\footnote{Available at \texttt{https://github.com/acossette/lsr-research}} The notebook provides a hands-on environment for exploring density collapse, comparing retrieval methods, and experimenting with parameter configurations on synthetic data with controllable collapse.
+An interactive companion notebook, built with marimo, accompanies this paper.\footnote{Available upon request from the corresponding author.} The notebook provides a hands-on environment for exploring density collapse, comparing retrieval methods, and experimenting with parameter configurations on synthetic data with controllable collapse.
 
-Future directions include evaluating LSR with multi-component proportional sampling on video and multimodal retrieval benchmarks, where large retrieval depths amplify both the redundancy problem and LSR's computational advantage, and investigating how embedding model architecture affects the prevalence and structure of density collapse.
+\paragraph{Limitations and future work.}
+The evaluation in this paper relies on geometric proxy metrics---redundancy ratio, variance coverage, and the spectral diagnostic $r_1$---rather than end-to-end task performance. This is a deliberate scope choice: we establish that density collapse is a real structural property of production corpora and that LSR corrects it more efficiently than alternatives. Whether correcting collapse improves \emph{downstream} task accuracy depends on the consumer of the retrieved set.
+
+For text-based RAG pipelines, the answer is nuanced. Large language models are robust to redundant context: given five near-duplicate passages, an LLM can still extract the correct answer, so diversity-aware retrieval may not measurably improve end-to-end accuracy on single-hop QA benchmarks. The benefit of LSR in text RAG is more likely to surface in multi-hop reasoning tasks where the model must synthesize information from multiple distinct sources---a setting where redundant retrieval actively harms coverage of the required evidence.
+
+The strongest case for downstream improvement lies in \emph{visual and embodied} systems. Vision-language models (VLMs) processing retrieved image sets, visual RAG pipelines assembling evidence from video keyframes, and vision-language-action models (VLAs) retrieving demonstration trajectories all \emph{structurally require} coverage of the relevant space. A robotic manipulation system retrieving five near-identical grasp demonstrations from a single viewpoint fails not because the demonstrations are low-quality, but because they lack the spatial and strategic diversity needed to generalize. In these modalities, the geometric diversity that LSR provides maps directly to functional diversity in the downstream task.
+
+Validating this hypothesis is the highest-priority next step. We plan to evaluate LSR in physics-realistic robotic simulation, measuring whether spectral diversification of retrieved demonstrations improves task success rates under the 10--100\,ms control loop budgets that are incompatible with $O(Nk^2d)$ diversification but well-suited to LSR's $O(Nd)$ spectral approach. Complementary evaluations on video retrieval benchmarks (where $k\!=\!50$--200 keyframes amplify both the redundancy problem and LSR's computational advantage) and visual QA tasks would further establish when diversity-aware retrieval translates to measurable downstream gains. Additionally, investigating how embedding model architecture affects the prevalence and structure of density collapse may reveal opportunities for co-designing retrieval and embedding systems.
+
+\section*{Acknowledgments}
+
+The author thanks Daniel Bukowski and Alex Gilmore for creating the Neo4j documentation embedding corpus used in the real-world evaluation experiments.
 
 \bibliographystyle{plain}
 \bibliography{refs}

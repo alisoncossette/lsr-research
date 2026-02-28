@@ -67,3 +67,24 @@ docs/METHOD.md
 
 # Result images (regenerate from scripts)
 results/visualizations/
+
+# Patent materials (CONFIDENTIAL - never publish)
+patent/
+
+# ACL demo build artifacts and WASM export assets
+acl-demo/*.aux
+acl-demo/*.log
+acl-demo/*.out
+acl-demo/*.bbl
+acl-demo/*.blg
+acl-demo/assets/
+acl-demo/style/
+acl-demo/*.html
+acl-demo/*.ico
+acl-demo/*.png
+acl-demo/*.json
+acl-demo/.nojekyll
+acl-demo/CLAUDE.md
+acl-demo/VIDEO_SCRIPT.md
+acl-demo/logo.png
+acl-demo/site.webmanifest

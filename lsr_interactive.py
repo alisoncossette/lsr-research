@@ -246,9 +246,12 @@ def _(PCA, np, seed_input, settings):
         embeddings = np.array(embeddings)
         similarities = np.array(similarities)
 
-        # Project to 3D for visualization using PCA on the full corpus
+        # Project to 3D for visualization using PCA fit on RELEVANT docs only
+        # This spreads out the neighborhood structure instead of squashing it
+        relevant_mask = np.array(is_relevant)
         pca_viz = PCA(n_components=3)
-        embeddings_3d = pca_viz.fit_transform(embeddings)
+        pca_viz.fit(embeddings[relevant_mask])
+        embeddings_3d = pca_viz.transform(embeddings)
         query_3d = pca_viz.transform(query.reshape(1, -1))[0]
         principal_3d = pca_viz.transform((query + principal_dir * 0.5).reshape(1, -1))[0] - query_3d
 
@@ -380,7 +383,7 @@ def _(data, go, make_subplots, np, threshold_slider):
         go.Histogram(
             x=data["similarities"],
             nbinsx=25,
-            marker_color='rgba(65, 105, 225, 0.7)',
+            marker_color='rgba(100, 149, 237, 0.85)',
             name='All docs'
         ),
         row=1, col=2
@@ -408,14 +411,29 @@ def _(data, go, make_subplots, np, threshold_slider):
         height=550,
         showlegend=True,
         paper_bgcolor='rgba(20,20,30,0.95)',
-        plot_bgcolor='rgba(20,20,30,0.95)',
+        plot_bgcolor='rgba(30,30,45,0.95)',
         font=dict(color='white'),
         scene=dict(
             bgcolor='rgba(20,20,30,0.95)',
-            xaxis=dict(gridcolor='rgba(255,255,255,0.1)', title='X'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.1)', title='Y'),
-            zaxis=dict(gridcolor='rgba(255,255,255,0.1)', title='Z'),
-        )
+            xaxis=dict(gridcolor='rgba(255,255,255,0.15)', title='PC1'),
+            yaxis=dict(gridcolor='rgba(255,255,255,0.15)', title='PC2'),
+            zaxis=dict(gridcolor='rgba(255,255,255,0.15)', title='PC3'),
+        ),
+        # Style the 2D histogram axes so they're visible on dark background
+        xaxis2=dict(
+            title='Cosine Similarity',
+            gridcolor='rgba(255,255,255,0.15)',
+            linecolor='rgba(255,255,255,0.3)',
+            tickcolor='white',
+            tickfont=dict(color='white'),
+        ),
+        yaxis2=dict(
+            title='Count',
+            gridcolor='rgba(255,255,255,0.15)',
+            linecolor='rgba(255,255,255,0.3)',
+            tickcolor='white',
+            tickfont=dict(color='white'),
+        ),
     )
 
     fig_battlefield
