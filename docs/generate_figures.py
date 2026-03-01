@@ -419,6 +419,8 @@ def fig_variance_coverage(embeddings):
         ratio = avg_time_mmr[i] / avg_time_lsr[i] if avg_time_lsr[i] > 0 else 0
         print(f"    {k:>4}  {avg_time_topk[i]:>8.1f}  {avg_time_mmr[i]:>8.1f}  {avg_time_lsr[i]:>8.1f}  {ratio:>7.1f}x")
 
+    return np.array(ks_plot), np.array(avg_time_mmr), np.array(avg_time_lsr), np.array(avg_time_topk)
+
 
 # ── Figure 5: eigen_spectrum ──────────────────────────────────────────────────
 def fig_eigen_spectrum(queries, embeddings):
@@ -521,6 +523,82 @@ def fig_tsne(pool, pool_sims):
     print("  tsne_lsr_vs_topk.pdf")
 
 
+# ── Figure 7: latency_at_scale ────────────────────────────────────────────────
+def fig_latency_at_scale(ks_measured, mmr_measured, lsr_measured, topk_measured):
+    """Projected latency to k=200 using fitted complexity models.
+
+    Generates two versions: log-scale and linear-scale y-axis.
+    MMR fit: a * k^b (power law, ~O(k^2))
+    LSR fit: a + b*k (linear, ~O(k))
+    """
+    from scipy.optimize import curve_fit
+
+    def power_law(k, a, b):
+        return a * k ** b
+
+    def linear(k, a, b):
+        return a + b * k
+
+    # Fit models to measured data
+    popt_mmr, _ = curve_fit(power_law, ks_measured, mmr_measured, p0=[50, 2])
+    popt_lsr, _ = curve_fit(linear, ks_measured, lsr_measured, p0=[20, 1])
+
+    k_proj = np.linspace(ks_measured[-1], 200, 200)
+    mmr_proj = power_law(k_proj, *popt_mmr)
+    lsr_proj = linear(k_proj, *popt_lsr)
+
+    print(f"    MMR fit: {popt_mmr[0]:.2f} * k^{popt_mmr[1]:.2f}")
+    print(f"    LSR fit: {popt_lsr[0]:.2f} + {popt_lsr[1]:.2f} * k")
+    print(f"    At k=200: MMR={power_law(200, *popt_mmr):.0f}us, "
+          f"LSR={linear(200, *popt_lsr):.0f}us, "
+          f"ratio={power_law(200, *popt_mmr)/linear(200, *popt_lsr):.0f}x")
+
+    for log_scale, suffix in [(True, ''), (False, '_linear')]:
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        # Measured (solid markers)
+        ax.plot(ks_measured, mmr_measured, 's', color='orange', markersize=8, zorder=5)
+        ax.plot(ks_measured, lsr_measured, 'o', color='crimson', markersize=8, zorder=5)
+        ax.plot([ks_measured[0], ks_measured[-1]],
+                [topk_measured[0], topk_measured[-1]], '-',
+                color='cornflowerblue', linewidth=2, label='Top-k (no diversity)')
+
+        # Projected (curves)
+        ax.plot(k_proj, mmr_proj, '-', color='orange', linewidth=2.5, label='MMR')
+        ax.plot(k_proj, lsr_proj, '-', color='crimson', linewidth=2.5, label='LSR')
+
+        # Shade projected region
+        ax.axvspan(ks_measured[-1], 200, alpha=0.06, color='gray')
+        y_text = max(mmr_proj) * 0.85 if not log_scale else 10 ** 6.5
+        ax.text(110, y_text, 'Projected', fontsize=12, fontstyle='italic',
+                color='gray', ha='center')
+
+        # fps budget lines
+        ax.axhline(33333, color='gray', linestyle='--', alpha=0.7)
+        ax.text(202, 33333, '30 fps budget', fontsize=9, va='center')
+        ax.axhline(8333, color='gray', linestyle=':', alpha=0.7)
+        ax.text(202, 8333, '120 fps budget', fontsize=9, va='center')
+
+        ax.set_xlabel('k (number of selected neighbors)')
+        ax.set_ylabel('Selection Latency (\u03bcs)')
+        ax.set_title('Selection Latency at Scale\n'
+                      '(solid = measured, shaded = projected from O(k) complexity)')
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, 205)
+
+        if log_scale:
+            ax.set_yscale('log')
+        else:
+            ax.set_ylim(0, None)
+
+        plt.tight_layout()
+        fname = f'latency_at_scale{suffix}.pdf'
+        fig.savefig(os.path.join(FIGS_DIR, fname), bbox_inches='tight')
+        plt.close(fig)
+        print(f"  {fname}")
+
+
 # ── Generate all ──────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("Loading Neo4j corpus embeddings...")
@@ -553,7 +631,8 @@ if __name__ == '__main__':
     fig_density_collapse(strong_pool, strong_pcs, strong_ratios)
     fig_pc1_projection(strong_proj_1d)
     fig_method_comparison(strong_pool, strong_proj_2d, strong_proj_1d, strong_sims)
-    fig_variance_coverage(embeddings)
+    ks_m, mmr_t, lsr_t, topk_t = fig_variance_coverage(embeddings)
+    fig_latency_at_scale(ks_m, mmr_t, lsr_t, topk_t)
     fig_eigen_spectrum(queries, embeddings)
     fig_tsne(strong_pool, strong_sims)
     print("\nDone! All figures saved to", FIGS_DIR)
