@@ -174,16 +174,12 @@ def fig_variance_coverage():
     dists = np.linalg.norm(points - query, axis=1)
     sorted_idx_pc1 = np.argsort(proj_1d)
 
-    vc_topk, vc_mmr, vc_lsr, vc_random = [], [], [], []
+    vc_topk, vc_mmr, vc_lsr = [], [], []
 
     for k in ks:
         # Top-k
         topk_idx = np.argsort(dists)[:k]
         vc_topk.append(variance_coverage(points[topk_idx], points))
-
-        # Random
-        rand_idx = np.random.choice(len(points), k, replace=False)
-        vc_random.append(variance_coverage(points[rand_idx], points))
 
         # LSR
         lsr_idx = [sorted_idx_pc1[int(i * len(sorted_idx_pc1) / k)] for i in range(k)]
@@ -207,14 +203,12 @@ def fig_variance_coverage():
     ax.plot(ks, vc_lsr, 'o-', color='crimson', linewidth=2, markersize=7, label='LSR')
     ax.plot(ks, vc_mmr, 's-', color='orange', linewidth=2, markersize=7, label='MMR')
     ax.plot(ks, vc_topk, '^-', color='dodgerblue', linewidth=2, markersize=7, label='Top-k')
-    ax.plot(ks, vc_random, 'D--', color='gray', linewidth=1.5, markersize=6, label='Random')
 
     ax.set_xlabel('k (number of selected neighbors)')
     ax.set_ylabel('Variance Coverage')
     ax.set_title('Variance Coverage vs. k')
     ax.legend()
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 1.05)
 
     plt.tight_layout()
     fig.savefig(os.path.join(FIGS_DIR, 'variance_coverage.pdf'), bbox_inches='tight')

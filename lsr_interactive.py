@@ -383,7 +383,7 @@ def _(data, go, make_subplots, np, threshold_slider):
         go.Histogram(
             x=data["similarities"],
             nbinsx=25,
-            marker_color='rgba(100, 149, 237, 0.85)',
+            marker_color='white',
             name='All docs'
         ),
         row=1, col=2
